@@ -15,10 +15,7 @@ Below are the internal types if you're interested:
 
 @docs ProgramEvent, ProgramState
 
-TODO improvements:
-- convert Stream.read stdin into "subscription-like",
-by adding it to init and restarting it on Typed event update
-- Clear the screen before displaying errors
+TODO expose
 
 -}
 
@@ -74,16 +71,18 @@ type ProgramState
         { environment : Node.Environment
         , fileSystemPermission : FileSystem.Permission
         , nextRuns : Array ExtraCheck.Run
-        , availableErrorsOnReject :
-            Dict
-                String
-                (Array
-                    { region : SourcePosition.Region
+        , fixableErrorsAwaitingResponse :
+            Maybe
+                { fixable :
+                    { source : String
+                    , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                     , message : String
                     , details : Array String
-                    , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
+                    , region : SourcePosition.Region
+                    , path : String
                     }
-                )
+                , otherErrors : Dict String (Array FileReviewError)
+                }
         , grenJson : { source : String, outline : Compiler.Outline.Outline }
         , filesByPath : Dict String String
         , directDependencies :
@@ -94,7 +93,7 @@ type ProgramState
         }
 
 
-{-| elm msg of a [`ExtraChecksRunnerNode.program`](#program)
+{-| msg of a [`ExtraChecksRunnerNode.program`](#program)
 -}
 type ProgramEvent
     = ModuleWatchEvent { sourceDirectory : FileSystem.Path.Path, event : FileSystem.WatchEvent }
@@ -104,6 +103,7 @@ type ProgramEvent
     | ExtraFileAddedOrChanged { path : FileSystem.Path.Path, source : Result String String }
     | ExtraFileRemoved { path : FileSystem.Path.Path }
     | ErrorFixRejected
+    | Typed (Result Stream.Error Bytes.Bytes)
 
 
 {-| Run checks, re-running on file changes.
@@ -356,9 +356,6 @@ taskSucceedToResult task =
         |> Task.onError (\error -> Task.succeed (Err error))
 
 
-check = "fruits.com"
-
-
 initialize :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
     -> Node.Environment
@@ -381,8 +378,9 @@ initialize config environment =
                             Nothing -> Task.succeed {}
                             Just terminalConfig ->
                                 -- it would be nice to also listen for ctrl+c
-                                -- here but I haven't found a way to do this
-                                -- since e.g. exit is not a Task or no Task.race primitive exists
+                                -- on init but I haven't found a way to do this
+                                -- since e.g. exit is not a Task or no Task.race primitive exists.
+                                -- Probably need to init to some uninitialized state that then fires these tasks
                                 Terminal.setStdInRawMode terminalConfig.permission True
                         )
                 )
@@ -455,39 +453,35 @@ initialize config environment =
                                                 { environment = environment
                                                 , fileSystemPermission = fileSystemPermission
                                                 , nextRuns = runResult.nextRuns
-                                                , availableErrorsOnReject =
-                                                    when maybeNextFixableErrorOrAllUnfixable is
-                                                        Nothing ->
-                                                            Dict.empty
-
-                                                        Just (AllUnfixable _) ->
-                                                            Dict.empty
-
-                                                        Just (Fixable nextFixable) ->
-                                                            nextFixable.otherErrors
+                                                , fixableErrorsAwaitingResponse =
+                                                    maybeNextFixableErrorOrAllUnfixable
+                                                        |> Maybe.andThen fixableOrAllUnfixableToFixable
                                                 , grenJson = initialInfo.grenJson
                                                 , filesByPath = initialFilesByPath
                                                 , directDependencies = initialInfo.directDependencies
                                                 }
                                         , command =
-                                            when maybeNextFixableErrorOrAllUnfixable is
-                                                Nothing ->
-                                                    noErrorsWaitingForChanges
-                                                        { stdin = environment.stdin
-                                                        , stdout = environment.stdout
-                                                        }
+                                            Platform.Cmd.batch
+                                                [ when maybeNextFixableErrorOrAllUnfixable is
+                                                    Nothing ->
+                                                        noErrorsWaitingForChanges
+                                                            { stdin = environment.stdin
+                                                            , stdout = environment.stdout
+                                                            }
 
-                                                Just nextFixableErrorOrAllUnfixable ->
-                                                    errorsReceived
-                                                        { fileSystemPermission = fileSystemPermission
-                                                        , stdin = environment.stdin
-                                                        , stdout = environment.stdout
-                                                        }
-                                                        { projectFilesByPath =
-                                                            initialFilesByPath
-                                                                |> Dict.set "gren.json" initialInfo.grenJson.source
-                                                        , errors = nextFixableErrorOrAllUnfixable
-                                                        }
+                                                    Just nextFixableErrorOrAllUnfixable ->
+                                                        errorsReceived
+                                                            { fileSystemPermission = fileSystemPermission
+                                                            , stdout = environment.stdout
+                                                            }
+                                                            { projectFilesByPath =
+                                                                initialFilesByPath
+                                                                    |> Dict.set "gren.json" initialInfo.grenJson.source
+                                                            , errors = nextFixableErrorOrAllUnfixable
+                                                            }
+                                                , -- TODO not when outside of interactive shell, auto-reject in that case
+                                                  Stream.read environment.stdin |> Task.attempt Typed
+                                                ]
                                         }
                         )
                 )
@@ -601,11 +595,93 @@ reactToEvent config event stateOrExited =
         
         Running state ->
             when event is
+                Typed stdinBytes ->
+                    let
+                        acceptedOrExitErr : Result {} Bool
+                        acceptedOrExitErr =
+                            when stdinBytes is 
+                                Err _ -> Ok False
+                                Ok responseBytes ->
+                                    if responseBytes == ctrlCBytes then
+                                        Err {}
+                                    else
+                                        Ok
+                                            (when responseBytes |> Bytes.toString is
+                                                Just "y" -> True
+                                                Just "Y" -> True
+                                                Just "\n" -> True
+                                                _ -> False
+                                            )
+                    in
+                    when acceptedOrExitErr is
+                        Err {} ->
+                            { model = Exited
+                            , command =
+                                Node.setExitCode 1 |> taskExecute
+                            }
+                        
+                        Ok accepted ->
+                            when state.fixableErrorsAwaitingResponse is
+                                Nothing ->
+                                    { model = stateOrExited
+                                    , command =
+                                        Stream.read state.environment.stdin |> Task.attempt Typed
+                                    }
+
+                                Just { fixable, otherErrors } ->
+                                    if accepted then
+                                        { model = stateOrExited
+                                        , command =
+                                            Platform.Cmd.batch
+                                                [ fixable.fixedSources
+                                                    |> Array.map
+                                                        (\fix ->
+                                                            FileSystem.writeFile state.fileSystemPermission
+                                                                (fix.fixedSource |> Bytes.fromString)
+                                                                (FileSystem.Path.fromPosixString ".."
+                                                                    |> FileSystem.Path.appendPosixString fix.path
+                                                                )
+                                                        )
+                                                    |> Task.concurrent
+                                                    |> taskSucceedToResult
+                                                    |> Task.andThen
+                                                        (\result ->
+                                                            when result is
+                                                                Err error ->
+                                                                    Stream.Log.line state.environment.stdout
+                                                                        ("Failed to apply this fix to at least one file: "
+                                                                            ++ (error |> FileSystem.errorToString)
+                                                                            ++ "\n"
+                                                                        )
+
+                                                                Ok _ ->
+                                                                    Stream.Log.line state.environment.stdout
+                                                                        "Ok, this fix was applied successfully.\n"
+                                                        )
+                                                    |> taskExecute
+                                                , Stream.read state.environment.stdin |> Task.attempt Typed
+                                                ]
+                                        }
+
+                                    else
+                                        -- TODO inline ErrorFixRejected
+                                        { model = stateOrExited
+                                        , command =
+                                            Platform.Cmd.batch
+                                                [ Stream.Log.line state.environment.stdout
+                                                    "Ok, this fix was not applied.\n"
+                                                    |> Task.perform (\{} -> ErrorFixRejected)
+                                                , Stream.read state.environment.stdin |> Task.attempt Typed
+                                                ]
+                                        }
+
                 ErrorFixRejected ->
                     let
                         maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
                         maybeNextFixableErrorOrAllUnfixable =
-                            state.availableErrorsOnReject
+                            state.fixableErrorsAwaitingResponse
+                                |> Maybe.map .otherErrors
+                                |> Maybe.withDefault Dict.empty
                                 |> errorsByPathToNextFixableErrorOrAll
                                     { elmJsonSource = state.grenJson.source
                                     , filesByPath = state.filesByPath
@@ -614,16 +690,9 @@ reactToEvent config event stateOrExited =
                     { model =
                         Running
                             { state
-                                | availableErrorsOnReject =
-                                    when maybeNextFixableErrorOrAllUnfixable is
-                                        Nothing ->
-                                            Dict.empty
-
-                                        Just (AllUnfixable _) ->
-                                            Dict.empty
-
-                                        Just (Fixable nextFixable) ->
-                                            nextFixable.otherErrors
+                            | fixableErrorsAwaitingResponse =
+                                maybeNextFixableErrorOrAllUnfixable
+                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
                             }
                     , command =
                         when maybeNextFixableErrorOrAllUnfixable is
@@ -636,7 +705,6 @@ reactToEvent config event stateOrExited =
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
                                     { fileSystemPermission = state.fileSystemPermission
-                                    , stdin = state.environment.stdin
                                     , stdout = state.environment.stdout
                                     }
                                     { projectFilesByPath =
@@ -770,16 +838,9 @@ reactToEvent config event stateOrExited =
                                         Running
                                             { state
                                             | nextRuns = runResult.nextRuns
-                                            , availableErrorsOnReject =
-                                                when maybeNextFixableErrorOrAllUnfixable is
-                                                    Nothing ->
-                                                        Dict.empty
-
-                                                    Just (AllUnfixable _) ->
-                                                        Dict.empty
-
-                                                    Just (Fixable nextFixable) ->
-                                                        nextFixable.otherErrors
+                                            , fixableErrorsAwaitingResponse =
+                                                maybeNextFixableErrorOrAllUnfixable
+                                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
                                             , grenJson = state.grenJson
                                             , filesByPath = filesByPathWithAddedOrChanged
                                             }
@@ -794,7 +855,6 @@ reactToEvent config event stateOrExited =
                                             Just nextFixableErrorOrAllUnfixable ->
                                                 errorsReceived
                                                     { fileSystemPermission = state.fileSystemPermission
-                                                    , stdin = state.environment.stdin
                                                     , stdout = state.environment.stdout
                                                     }
                                                     { projectFilesByPath =
@@ -845,16 +905,9 @@ reactToEvent config event stateOrExited =
                         Running
                             { state
                             | nextRuns = runResult.nextRuns
-                            , availableErrorsOnReject =
-                                when maybeNextFixableErrorOrAllUnfixable is
-                                    Nothing ->
-                                        Dict.empty
-
-                                    Just (AllUnfixable _) ->
-                                        Dict.empty
-
-                                    Just (Fixable nextFixable) ->
-                                        nextFixable.otherErrors
+                            , fixableErrorsAwaitingResponse =
+                                maybeNextFixableErrorOrAllUnfixable
+                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
                             , grenJson = state.grenJson
                             , filesByPath = filesByPathWithRemoved
                             }
@@ -869,7 +922,6 @@ reactToEvent config event stateOrExited =
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
                                     { fileSystemPermission = state.fileSystemPermission
-                                    , stdin = state.environment.stdin
                                     , stdout = state.environment.stdout
                                     }
                                     { projectFilesByPath =
@@ -983,16 +1035,9 @@ reactToEvent config event stateOrExited =
                                 Running
                                     { state
                                     | nextRuns = runResult.nextRuns
-                                    , availableErrorsOnReject =
-                                        when maybeNextFixableErrorOrAllUnfixable is
-                                            Nothing ->
-                                                Dict.empty
-
-                                            Just (AllUnfixable _) ->
-                                                Dict.empty
-
-                                            Just (Fixable nextFixable) ->
-                                                nextFixable.otherErrors
+                                    , fixableErrorsAwaitingResponse =
+                                        maybeNextFixableErrorOrAllUnfixable
+                                            |> Maybe.andThen fixableOrAllUnfixableToFixable
                                     , grenJson = state.grenJson
                                     , filesByPath = filesByPathWithAddedOrChanged
                                     }
@@ -1007,7 +1052,6 @@ reactToEvent config event stateOrExited =
                                     Just nextFixableErrorOrAllUnfixable ->
                                         errorsReceived
                                             { fileSystemPermission = state.fileSystemPermission
-                                            , stdin = state.environment.stdin
                                             , stdout = state.environment.stdout
                                             }
                                             { projectFilesByPath =
@@ -1058,16 +1102,9 @@ reactToEvent config event stateOrExited =
                         Running
                             { state
                             | nextRuns = runResult.nextRuns
-                            , availableErrorsOnReject =
-                                when maybeNextFixableErrorOrAllUnfixable is
-                                    Nothing ->
-                                        Dict.empty
-
-                                    Just (AllUnfixable _) ->
-                                        Dict.empty
-
-                                    Just (Fixable nextFixable) ->
-                                        nextFixable.otherErrors
+                            , fixableErrorsAwaitingResponse =
+                                maybeNextFixableErrorOrAllUnfixable
+                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
                             , grenJson = state.grenJson
                             , filesByPath = filesByPathWithRemoved
                             }
@@ -1082,7 +1119,6 @@ reactToEvent config event stateOrExited =
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
                                     { fileSystemPermission = state.fileSystemPermission
-                                    , stdin = state.environment.stdin
                                     , stdout = state.environment.stdout
                                     }
                                     { projectFilesByPath =
@@ -1094,10 +1130,12 @@ reactToEvent config event stateOrExited =
 
 
 noErrorsWaitingForChanges { stdin, stdout } =
+    -- TODO if not in interactive terminal, exit
     Stream.Log.line stdout
-        "\nNo further errors currently, watching for changes... Exit with ctrl+c\n"
+        (Ansi.clear
+            ++ "No further errors currently, watching for changes... To stop, press ctrl+c"
+        )
         |> taskExecute
-
 
 ctrlCBytes : Bytes.Bytes
 ctrlCBytes =
@@ -1106,120 +1144,57 @@ ctrlCBytes =
 
 errorsReceived :
     { fileSystemPermission : FileSystem.Permission
-    , stdin : Stream.Readable Bytes.Bytes
     , stdout : Stream.Writable Bytes.Bytes
     }
     ->
-        { projectFilesByPath : Dict.Dict String.String String.String
+        { projectFilesByPath : Dict String String
         , errors : NextFixableOrAllUnfixable
         }
     -> Platform.Cmd.Cmd ProgramEvent
-errorsReceived { fileSystemPermission, stdin, stdout } { projectFilesByPath, errors } =
+errorsReceived { fileSystemPermission, stdout } { projectFilesByPath, errors } =
     when errors is
         AllUnfixable unfixableErrors ->
             Stream.Log.string stdout
-                (unfixableErrors
-                    |> Dict.foldl
-                        (\path pathErrors soFar ->
-                            soFar
-                                ++ (pathErrors
-                                        |> Array.map
-                                            (\error ->
-                                                { path = path
-                                                , region = error.region
-                                                , message = error.message
-                                                , details = error.details
-                                                , fixedSources = []
-                                                }
-                                                    |> errorDisplay
-                                                        (projectFilesByPath
-                                                            |> Dict.get path
-                                                            |> Maybe.withDefault ""
-                                                        )
-                                            )
-                                        |> String.join "\n\n"
-                                   )
-                                ++ "\n\n\n"
-                        )
-                        ""
+                (Ansi.clear
+                    ++ (unfixableErrors
+                            |> Dict.foldl
+                                (\path pathErrors soFar ->
+                                    soFar
+                                        ++ (pathErrors
+                                                |> Array.map
+                                                    (\error ->
+                                                        { path = path
+                                                        , region = error.region
+                                                        , message = error.message
+                                                        , details = error.details
+                                                        , fixedSources = []
+                                                        }
+                                                            |> errorDisplay
+                                                                (projectFilesByPath
+                                                                    |> Dict.get path
+                                                                    |> Maybe.withDefault ""
+                                                                )
+                                                    )
+                                                |> String.join "\n\n"
+                                        )
+                                        ++ "\n\n\n"
+                                )
+                                ""
+                       )
                 )
                 |> taskExecute
 
         Fixable { fixable, otherErrors } ->
-            -- TODO ask for fixable, if no print errors (?)
             Stream.Log.line stdout
-                (fixable
-                    |> errorDisplay
-                        fixable.source
+                (Ansi.clear
+                    ++ (fixable |> errorDisplay fixable.source)
                 )
                 |> Task.andThen
                     (\{} ->
                         Stream.Log.line stdout
                             "\nApply these edits by pressing y. Reject by pressing n"
                     )
-                |> Task.andThen
-                    (\{} ->
-                        Stream.read stdin
-                            |> taskSucceedToResult
-                            |> Task.map
-                                (\response ->
-                                    let
-                                        acceptedOrExitErr : Result {} Bool
-                                        acceptedOrExitErr =
-                                            when response is 
-                                                Err _ -> Ok False
-                                                Ok responseBytes ->
-                                                    if responseBytes == ctrlCBytes then
-                                                        Err {}
-                                                    else
-                                                        Ok
-                                                            (when responseBytes |> Bytes.toString is
-                                                                Just "y" -> True
-                                                                Just "Y" -> True
-                                                                Just "\n" -> True
-                                                                _ -> False
-                                                            )
-                                    in
-                                    when acceptedOrExitErr is
-                                        Err {} ->
-                                            Stream.Log.line stdout ""
-                                                |> Task.map (\{} -> Node.exitWithCode 1)
-                                                |> Task.executeCmd
-                                        Ok True ->
-                                            fixable.fixedSources
-                                                |> Array.map
-                                                    (\fix ->
-                                                        FileSystem.writeFile fileSystemPermission
-                                                            (fix.fixedSource |> Bytes.fromString)
-                                                            (FileSystem.Path.fromPosixString ".."
-                                                                |> FileSystem.Path.appendPosixString fix.path
-                                                            )
-                                                    )
-                                                |> Task.concurrent
-                                                |> taskSucceedToResult
-                                                |> Task.andThen
-                                                    (\result ->
-                                                        when result is
-                                                            Err error ->
-                                                                Stream.Log.line stdout
-                                                                    ("Failed to apply this fix to at least one file: "
-                                                                        ++ (error |> FileSystem.errorToString)
-                                                                        ++ "\n"
-                                                                    )
-
-                                                            Ok _ ->
-                                                                Stream.Log.line stdout
-                                                                    "Ok, this fix was applied successfully.\n"
-                                                    )
-                                                |> taskExecute
-                                        Ok False ->
-                                            -- TODO go through otherErrors
-                                            Stream.Log.line stdout
-                                                "Ok, this fix was not applied.\n"
-                                                |> Task.perform (\{} -> ErrorFixRejected)
-                                )
-                    )
-                |> Task.executeCmd
+                |> taskExecute
 
 
 failedToParseModulesMessage : Array { path : String, error : String } -> String
@@ -1746,6 +1721,29 @@ type NextFixableOrAllUnfixable
             }
         , otherErrors : Dict String (Array FileReviewError)
         }
+
+
+fixableOrAllUnfixableToFixable :
+    NextFixableOrAllUnfixable
+    ->
+        Maybe
+            { fixable :
+                { source : String
+                , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                , message : String
+                , details : Array String
+                , region : SourcePosition.Region
+                , path : String
+                }
+            , otherErrors : Dict String (Array FileReviewError)
+            }
+fixableOrAllUnfixableToFixable fixableOrAllUnfixable =
+    when fixableOrAllUnfixable is
+        AllUnfixable _ ->
+            Nothing
+
+        Fixable fixable ->
+            Just fixable
 
 
 {-| Safer alternative to `Task.execute` that doesn't allow you to accidentally
