@@ -473,7 +473,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
                                 maybeNextFixableErrorOrAllUnfixable =
                                     runResult.errorsByPath
                                         |> errorsByPathToNextFixableErrorOrAll
-                                            { elmJsonSource = initialInfo.grenJson.source
+                                            { grenJsonSource = initialInfo.grenJson.source
                                             , filesByPath = initialFilesByPath
                                             }
                             in
@@ -730,7 +730,7 @@ update config event stateOrExited =
                                 |> Maybe.map .otherErrors
                                 |> Maybe.withDefault Dict.empty
                                 |> errorsByPathToNextFixableErrorOrAll
-                                    { elmJsonSource = state.grenJson.source
+                                    { grenJsonSource = state.grenJson.source
                                     , filesByPath = state.filesByPath
                                     }
                     in
@@ -877,7 +877,7 @@ update config event stateOrExited =
                                         maybeNextFixableErrorOrAllUnfixable =
                                             runResult.errorsByPath
                                                 |> errorsByPathToNextFixableErrorOrAll
-                                                    { elmJsonSource = state.grenJson.source
+                                                    { grenJsonSource = state.grenJson.source
                                                     , filesByPath = filesByPathWithAddedOrChanged
                                                     }
                                     in
@@ -944,7 +944,7 @@ update config event stateOrExited =
                         maybeNextFixableErrorOrAllUnfixable =
                             runResult.errorsByPath
                                 |> errorsByPathToNextFixableErrorOrAll
-                                    { elmJsonSource = state.grenJson.source
+                                    { grenJsonSource = state.grenJson.source
                                     , filesByPath = filesByPathWithRemoved
                                     }
                     in
@@ -1074,7 +1074,7 @@ update config event stateOrExited =
                                 maybeNextFixableErrorOrAllUnfixable =
                                     runResult.errorsByPath
                                         |> errorsByPathToNextFixableErrorOrAll
-                                            { elmJsonSource = state.grenJson.source
+                                            { grenJsonSource = state.grenJson.source
                                             , filesByPath = filesByPathWithAddedOrChanged
                                             }
                             in
@@ -1141,7 +1141,7 @@ update config event stateOrExited =
                         maybeNextFixableErrorOrAllUnfixable =
                             runResult.errorsByPath
                                 |> errorsByPathToNextFixableErrorOrAll
-                                    { elmJsonSource = state.grenJson.source
+                                    { grenJsonSource = state.grenJson.source
                                     , filesByPath = filesByPathWithRemoved
                                     }
                     in
@@ -1338,7 +1338,7 @@ sourcePositionCompare a b =
 
 
 errorsByPathToNextFixableErrorOrAll :
-    { elmJsonSource : String, filesByPath : Dict String String }
+    { grenJsonSource : String, filesByPath : Dict String String }
     -> Dict String (Array FileReviewError)
     -> Maybe NextFixableOrAllUnfixable
 errorsByPathToNextFixableErrorOrAll project errorsByPath =
@@ -1347,7 +1347,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
         sourceAtPath path =
             when path is
                 "gren.json" ->
-                    project.elmJsonSource |> Just
+                    project.grenJsonSource |> Just
 
                 filePath ->
                     project.filesByPath |> Dict.get filePath

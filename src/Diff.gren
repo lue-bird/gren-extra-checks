@@ -87,7 +87,7 @@ If it returns Err, it should be a bug.
 testDiff : Array a -> Array a -> Result BugReport (Array (Change a))
 testDiff arrA arrB =
     let
-        -- Elm's Array doesn't allow null element,
+        -- gren's Array doesn't allow null element,
         -- so we'll use shifted index to access source.
         getA : Int -> Maybe a
         getA a =

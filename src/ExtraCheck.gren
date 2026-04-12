@@ -1,7 +1,7 @@
 module ExtraCheck exposing
     ( ignoreErrorsForPathsWhere
     , create
-    , inspectElmJson, inspectDirectDependencies, inspectExtraFile, inspectModule
+    , inspectGrenJson, inspectDirectDependencies, inspectExtraFile, inspectModule
     , Error, grenJsonPath
     , SourceEdit(..), insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
@@ -31,7 +31,7 @@ and add examples of patterns that will (not) be reported.
 
 Collect knowledge from parts of the project.
 
-@docs inspectElmJson, inspectDirectDependencies, inspectExtraFile, inspectModule
+@docs inspectGrenJson, inspectDirectDependencies, inspectExtraFile, inspectModule
 
 
 # reporting
@@ -48,19 +48,26 @@ For example,
 by only listing all immediate sub-parts of a piece of syntax you can choose to traverse it however you need to.
 E.g. to find all `as` pattern regions
 
-    findAllAsPatternRanges :
-        SourcePosition.Located ELm.Syntax.Pattern.Pattern
-        -> Array ELm.Syntax.Range.Range
-    findAllAsPatternRanges patternNode =
-        (when patternNode is
-            SourcePosition.Located asRange (Gren.Syntax.Pattern.AsPattern _ _) ->
-                [ asRange ]
+    findAllAsPatternRegions :
+        Compiler.Ast.Source.Pattern
+        -> Array SourcePosition.Region
+    findAllAsPatternRegions patternNode =
+        (when patternNode.value is
+            Compiler.Ast.Source.PAlias _ ->
+                [ patternNode.region ]
 
             _ ->
                 []
         )
-            ++ (patternNode |> ExtraCheck.patternSubs |> Array.mapAndFlatten findAllAsPatternRanges)
+            ++ (patternNode.value
+                    |> ExtraCheck.patternImmediateSubsFold
+                        (\sub withSubsSoFar ->
+                            withSubsSoFar |> Array.append (findAllAsPatternRegions sub)
+                        )
+                        []
+               )
 
+In practice you should use an Array.Builder instead of Array here.
 This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
 
 TODO add helper to traverse pattern and type and expression with introduced local bindings sub-AST located nodes
@@ -322,13 +329,13 @@ inspectModule moduleDataToKnowledge =
     InspectModule moduleDataToKnowledge
 
 
-{-| Collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Project#Project).
+{-| Collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#Outline).
 You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
 -}
-inspectElmJson :
+inspectGrenJson :
     ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
     -> Inspect knowledge
-inspectElmJson moduleDataToKnowledge =
+inspectGrenJson moduleDataToKnowledge =
     InspectGrenJson moduleDataToKnowledge
 
 
@@ -341,9 +348,8 @@ inspectExtraFile moduleDataToKnowledge =
     InspectExtraFile moduleDataToKnowledge
 
 
-{-| Collect knowledge from all [project configs](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Project#Project)
-and [module docs](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Docs#Module)
-the project directly depends on
+{-| Collect knowledge from all [packages](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#PkgOutline)
+and their modules the project directly depends on
 -}
 inspectDirectDependencies :
     (Array 
@@ -1807,10 +1813,10 @@ toCheckResult check project =
                                 )
                         )
                             ++ (when runErrorsByPath |> Dict.get "gren.json" is
-                                    Just errorsForElmJson ->
+                                    Just errorsForGrenJson ->
                                         [ { path = "gren.json"
                                             , source = project.grenJson.source
-                                            , errors = errorsForElmJson
+                                            , errors = errorsForGrenJson
                                             }
                                         ]
 
@@ -1918,8 +1924,8 @@ invalidExpectedErrorsIn project expectedErrors =
         sourceDirectories =
             project.outline |> compilerOutlineSourceDirectories
 
-        projectPathsExceptElmJson : Set String
-        projectPathsExceptElmJson =
+        projectPathsExceptGrenJson : Set String
+        projectPathsExceptGrenJson =
             project.files |> SetLocalExtra.fromListMap .path
 
         pathIsModule : String -> Bool
@@ -1929,11 +1935,11 @@ invalidExpectedErrorsIn project expectedErrors =
 
         modulePaths : Set String
         modulePaths =
-            projectPathsExceptElmJson |> Set.keepIf pathIsModule
+            projectPathsExceptGrenJson |> Set.keepIf pathIsModule
 
         projectPaths : Set String
         projectPaths =
-            projectPathsExceptElmJson |> Set.set "gren.json"
+            projectPathsExceptGrenJson |> Set.set "gren.json"
     in
     (expectedErrors
         |> Array.mapAndKeepJust
