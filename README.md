@@ -35,9 +35,10 @@ import Array.Builder
 check : ExtraCheck.Check
 check =
     ExtraCheck.create
-        { inspect =
-            [ ExtraCheck.inspectModule moduleDataToKnowledge
-            ]
+        { inspectModule = moduleDataToKnowledge
+        , inspectGrenJson = \_ -> { typosInStrings = [] }
+        , inspectExtraFile = \_ -> { typosInStrings = [] }
+        , inspectDirectDependencies = \_ -> { typosInStrings = [] }
         , knowledgeMerge = knowledgeMerge
         , report = report
         }

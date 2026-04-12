@@ -1,7 +1,6 @@
 module ExtraCheck exposing
     ( ignoreErrorsForPathsWhere
     , create
-    , inspectGrenJson, inspectDirectDependencies, inspectExtraFile, inspectModule
     , Error, grenJsonPath
     , SourceEdit(..), insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
@@ -10,7 +9,7 @@ module ExtraCheck exposing
     , sourceExtractInRange, sourceRegionsOf
     , outlineExposedModuleNameSet
     , test, applicationConfigurationMinimal, ExpectedErrorRange(..)
-    , Inspect(..), Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
+    , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
     )
 
 {-| A check inspects modules, `gren.json`, dependencies and extra files like `README.md` from your project
@@ -25,13 +24,6 @@ Everything below is intended for writing a new check.
 Alongside your implementation, write [tests](#testing),
 document what is enforced, what the goal is and which situations the check makes sense
 and add examples of patterns that will (not) be reported.
-
-
-# inspecting
-
-Collect knowledge from parts of the project.
-
-@docs inspectGrenJson, inspectDirectDependencies, inspectExtraFile, inspectModule
 
 
 # reporting
@@ -220,24 +212,6 @@ type Run
         )
 
 
-{-| How to collect knowledge from scanning a single part of the project
--}
-type Inspect knowledge
-    = InspectDirectDependencies
-        (Array
-            { outline : Compiler.Outline.PkgOutline
-            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
-            }
-         -> knowledge
-        )
-    | InspectGrenJson ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
-    | InspectExtraFile ({ path : String, source : String } -> knowledge)
-    | InspectModule
-        ({ syntax : Compiler.Ast.Source.Module, source : String, path : String }
-         -> knowledge
-        )
-
-
 {-| Relative path to the project gren.json to be used in an [`Error`](#Error) or [expected test error](ExtraCheck#test).
 Always equal to `"gren.json"`
 -}
@@ -246,9 +220,20 @@ grenJsonPath =
     "gren.json"
 
 
-{-| Collect knowledge from a module file.
+{-| To write a new [`Check`](#Check) you need to
 
-The path is relative to the project's `gren.json`
+  - `inspectModule`: collect knowledge from module syntax. More info below
+  - `inspectGrenJson`: collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#Outline).
+    You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
+  - `inspectExtraFile`: collect knowledge from an available files like README.md or CHANGELOG.md that aren't source modules or the gren.json.
+    The provided path is relative to the project's `gren.json`
+    and can be used as an [`Error`](#Error) target file path
+  - `inspectDirectDependencies`: collect knowledge from all [packages](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#PkgOutline)
+    and their modules the project directly depends on
+  - `knowledgeMerge`: combine collected knowledge from different parts
+  - `report`: evaluate your combined knowledge and provide [errors](#Error)
+
+For `inspectModule`, the path is relative to the project's `gren.json`
 and can be used as an [`Error`](#Error) target file path.
 
 The raw gren file source can be used
@@ -257,14 +242,11 @@ in when you want to move and copy things around,
 see [`sourceExtractInRange`](#sourceExtractInRange).
 
 The `syntax` field contains a tree-like structure which represents your source code:
-[`Compiler.Ast.Source.Module`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source#Module).
+[`Compiler.Ast.Source.Module`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.Ast.Source#Module).
 I recommend having the documentation for that package open while writing a check.
 
-
-### syntax.imports
-
 The module's
-[import statements](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source#Import)
+[import statements](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.Ast.Source#Import)
 (`import Html as H exposing (div)`) in order of their definition.
 A nice helper to get the exposes: [`exposedArrayToExposes`](#exposedArrayToExposes)
 
@@ -280,31 +262,31 @@ An example check that forbids importing both `Element` (`gren-ui`) and
     check : ExtraCheck.Check
     check =
         ExtraCheck.create
-            { inspect =
-                [ ExtraCheck.inspectModule
-                    (\moduleData ->
-                        let
-                            importedModuleNames : Dict String SourcePosition.Region
-                            importedModuleNames =
-                                moduleData.syntax.imports
-                                    |> Array.map
-                                        (\(SourcePosition.Located _ import_) ->
-                                            ( import.moduleName |> Gren.Syntax.Node.value, import.moduleName |> Gren.Syntax.Node.region )
-                                        )
-                                    |> Dict.fromList
-                        in
-                        when
-                            Maybe.map2 (\elementImportRange _ -> elementImportRange)
-                                (importedModuleNames |> Dict.get [ "Element" ])
-                                (importedModuleNames |> Dict.get [ "Html", "Styled" ])
-                        is
-                            Just elementImportRange ->
-                                Dict.singleton moduleData.path elementImportRange
+            { inspectModule =
+                \moduleData ->
+                    let
+                        importedModuleNames : Dict String SourcePosition.Region
+                        importedModuleNames =
+                            moduleData.syntax.imports
+                                |> Array.map
+                                    (\(SourcePosition.Located _ import_) ->
+                                        ( import.moduleName |> Gren.Syntax.Node.value, import.moduleName |> Gren.Syntax.Node.region )
+                                    )
+                                |> Dict.fromList
+                    in
+                    when
+                        Maybe.map2 (\elementImportRange _ -> elementImportRange)
+                            (importedModuleNames |> Dict.get [ "Element" ])
+                            (importedModuleNames |> Dict.get [ "Html", "Styled" ])
+                    is
+                        Just elementImportRange ->
+                            Dict.singleton moduleData.path elementImportRange
 
-                            _ ->
-                                Dict.empty
-                    )
-                ]
+                        _ ->
+                            Dict.empty
+            , inspectDirectDependencies = \_ -> Dict.empty
+            , inspectGrenJson = \_ -> Dict.empty
+            , inspectExtraFile = \_ -> Dict.empty
             , knowledgeMerge = \a b -> Dict.union a b
             , report =
                 \invalidImportsByPath ->
@@ -322,79 +304,25 @@ An example check that forbids importing both `Element` (`gren-ui`) and
             }
 
 -}
-inspectModule :
-    ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
-    -> Inspect knowledge
-inspectModule moduleDataToKnowledge =
-    InspectModule moduleDataToKnowledge
-
-
-{-| Collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#Outline).
-You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
--}
-inspectGrenJson :
-    ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
-    -> Inspect knowledge
-inspectGrenJson moduleDataToKnowledge =
-    InspectGrenJson moduleDataToKnowledge
-
-
-{-| Collect knowledge from an available files like README.md or CHANGELOG.md that aren't source modules or the gren.json.
-The provided path is relative to the project's `gren.json`
-and can be used as an [`Error`](#Error) target file path
--}
-inspectExtraFile : ({ path : String, source : String } -> knowledge) -> Inspect knowledge
-inspectExtraFile moduleDataToKnowledge =
-    InspectExtraFile moduleDataToKnowledge
-
-
-{-| Collect knowledge from all [packages](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#PkgOutline)
-and their modules the project directly depends on
--}
-inspectDirectDependencies :
-    (Array 
-        { outline : Compiler.Outline.PkgOutline
-        , modules :
-            Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
-        }
-        -> knowledge
-    )
-    -> Inspect knowledge
-inspectDirectDependencies moduleDataToKnowledge =
-    InspectDirectDependencies moduleDataToKnowledge
-
-
-{-| To write a new [`Check`](#Check) you need to
-
-  - `inspect`: what parts to collect what knowledge from, see ["inspecting"](#inspecting)
-  - `knowledgeMerge`: combine collected knowledge from different parts
-  - `report`: evaluate your combined knowledge and provide [errors](#Error)
-
--}
 create :
-    { inspect : Array (Inspect knowledge)
+    { inspectModule :
+        { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+        -> knowledge
+    , inspectGrenJson :
+        { source : String, outline : Compiler.Outline.Outline } -> knowledge
+    , inspectExtraFile : { path : String, source : String } -> knowledge
+    , inspectDirectDependencies :
+        Array.Array
+            { outline : Compiler.Outline.PkgOutline
+            , modules : Array.Array { syntax : Compiler.Ast.Source.Module, source : String.String, path : String.String }
+            }
+        -> knowledge
     , knowledgeMerge : knowledge -> knowledge -> knowledge
     , report : knowledge -> Array Error
     }
     -> Check
 create check =
     let
-        toKnowledges :
-            { directDependenciesToKnowledge :
-                Array.Builder.Builder
-                    (Array
-                        { outline : Compiler.Outline.PkgOutline
-                        , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
-                        }
-                     -> knowledge
-                    )
-            , grenJsonToKnowledge : Array.Builder.Builder ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
-            , extraFileToKnowledge : Array.Builder.Builder ({ path : String, source : String } -> knowledge)
-            , moduleToKnowledge : Array.Builder.Builder ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
-            }
-        toKnowledges =
-            check.inspect |> inspectToToKnowledges
-
         knowledgesFoldMapToMaybe : (element -> knowledge) -> Array element -> Maybe knowledge
         knowledgesFoldMapToMaybe elementToKnowledge knowledges =
             when knowledges |> Array.popLast is
@@ -410,19 +338,14 @@ create check =
                             (one |> elementToKnowledge)
                         |> Just
 
-        moduleToMaybeKnowledge :
+        moduleToKnowledge :
             { path : String, source : String, syntax : Compiler.Ast.Source.Module }
-            -> Maybe { path : String, knowledge : knowledge }
-        moduleToMaybeKnowledge moduleFile =
-            toKnowledges.moduleToKnowledge
-                |> Array.Builder.toArray
-                |> knowledgesFoldMapToMaybe (\f -> f moduleFile)
-                |> Maybe.map
-                    (\foldedKnowledge ->
-                        { path = moduleFile.path
-                        , knowledge = foldedKnowledge
-                        }
-                    )
+            -> { path : String, knowledge : knowledge }
+        moduleToKnowledge moduleFile =
+            -- TODO inline
+            { path = moduleFile.path
+            , knowledge = check.inspectModule moduleFile
+            }
 
         runWithCache : Cache knowledge -> Run
         runWithCache cache =
@@ -430,33 +353,29 @@ create check =
             Run
                 (\project ->
                     let
-                        grenJsonKnowledgeAndCache : Maybe knowledge
+                        grenJsonKnowledgeAndCache : knowledge
                         grenJsonKnowledgeAndCache =
                             when cache.grenJsonKnowledge is
                                 Just grenJsonKnowledgeCache ->
-                                    grenJsonKnowledgeCache |> Just
+                                    grenJsonKnowledgeCache
 
                                 Nothing ->
-                                    toKnowledges.grenJsonToKnowledge
-                                        |> Array.Builder.toArray
-                                        |> knowledgesFoldMapToMaybe (\f -> f project.grenJson)
+                                    check.inspectGrenJson project.grenJson
 
-                        directDependenciesKnowledgeAndCache : Maybe knowledge
+                        directDependenciesKnowledgeAndCache : knowledge
                         directDependenciesKnowledgeAndCache =
                             when cache.directDependenciesKnowledge is
                                 Just knowledge ->
-                                    knowledge |> Just
+                                    knowledge
 
                                 Nothing ->
-                                    toKnowledges.directDependenciesToKnowledge
-                                        |> Array.Builder.toArray
-                                        |> knowledgesFoldMapToMaybe (\f -> f project.directDependencies)
+                                    check.inspectDirectDependencies project.directDependencies
 
                         moduleKnowledges : Array { path : String, knowledge : knowledge }
                         moduleKnowledges =
                             Dict.merge
-                                (\_ new soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
-                                (\_ new _ soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\_ new soFar -> soFar |> Array.Builder.pushLast new)
+                                (\_ new _ soFar -> soFar |> Array.Builder.pushLast new)
                                 (\path knowledgeCache soFar ->
                                     soFar
                                         |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache } 
@@ -465,7 +384,7 @@ create check =
                                     |> DictLocalExtra.fromArrayMap
                                         (\file ->
                                             { key = file.path
-                                            , value = file |> moduleToMaybeKnowledge
+                                            , value = file |> moduleToKnowledge
                                             }
                                         )
                                 )
@@ -475,25 +394,19 @@ create check =
                                 (Array.Builder.empty 2)
                                 |> Array.Builder.toArray
 
-                        extraFileToMaybeKnowledge :
+                        extraFileToKnowledge :
                             { path : String, source : String }
-                            -> Maybe { path : String, knowledge : knowledge }
-                        extraFileToMaybeKnowledge fileInfo =
-                            toKnowledges.extraFileToKnowledge
-                                |> Array.Builder.toArray
-                                |> knowledgesFoldMapToMaybe (\f -> f fileInfo)
-                                |> Maybe.map
-                                    (\foldedKnowledge ->
-                                        { path = fileInfo.path
-                                        , knowledge = foldedKnowledge
-                                        }
-                                    )
+                            -> { path : String, knowledge : knowledge }
+                        extraFileToKnowledge fileInfo =
+                            { path = fileInfo.path
+                            , knowledge = check.inspectExtraFile fileInfo
+                            }
 
                         extraFilesKnowledges : Array { path : String, knowledge : knowledge }
                         extraFilesKnowledges =
                             Dict.merge
-                                (\_ new soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
-                                (\_ new _ soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\_ new soFar -> soFar |> Array.Builder.pushLast new)
+                                (\_ new _ soFar -> soFar |> Array.Builder.pushLast new)
                                 (\path knowledgeCache soFar ->
                                     soFar
                                         |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache }
@@ -502,7 +415,7 @@ create check =
                                     |> DictLocalExtra.fromArrayMap
                                         (\file ->
                                             { key = file.path
-                                            , value = file |> extraFileToMaybeKnowledge
+                                            , value = file |> extraFileToKnowledge
                                             }
                                         )
                                 )
@@ -514,11 +427,12 @@ create check =
 
                         allKnowledges : Array knowledge
                         allKnowledges =
-                            ((moduleKnowledges |> Array.map .knowledge)
-                                ++ (extraFilesKnowledges |> Array.map .knowledge)
+                            -- can maybe be optimized
+                            ((extraFilesKnowledges |> Array.map .knowledge)
+                                ++ (moduleKnowledges |> Array.map .knowledge)
                             )
-                                |> ArrayLocalExtra.pushLastJust directDependenciesKnowledgeAndCache
-                                |> ArrayLocalExtra.pushLastJust grenJsonKnowledgeAndCache
+                                |> Array.pushLast directDependenciesKnowledgeAndCache
+                                |> Array.pushLast grenJsonKnowledgeAndCache
                     in
                     when allKnowledges |> knowledgesFoldMapToMaybe Basics.identity is
                         Nothing ->
@@ -549,8 +463,8 @@ create check =
                                         |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
                             , nextRun =
                                 runWithCache
-                                    { grenJsonKnowledge = grenJsonKnowledgeAndCache
-                                    , directDependenciesKnowledge = directDependenciesKnowledgeAndCache
+                                    { grenJsonKnowledge = Just grenJsonKnowledgeAndCache
+                                    , directDependenciesKnowledge = Just directDependenciesKnowledgeAndCache
                                     , moduleKnowledgeByPath =
                                         moduleKnowledges
                                             |> DictLocalExtra.fromArrayMap
@@ -599,69 +513,6 @@ knowledgeCacheEmpty =
     , moduleKnowledgeByPath = Dict.empty
     , extraFileKnowledgeByPath = Dict.empty
     }
-
-
-inspectToToKnowledges :
-    Array (Inspect knowledge)
-    ->
-        { directDependenciesToKnowledge :
-            Array.Builder.Builder
-                (Array
-                    { outline : Compiler.Outline.PkgOutline
-                    , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
-                    }
-                 -> knowledge
-                )
-        , grenJsonToKnowledge : Array.Builder.Builder ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
-        , extraFileToKnowledge : Array.Builder.Builder ({ path : String, source : String } -> knowledge)
-        , moduleToKnowledge : Array.Builder.Builder ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
-        }
-inspectToToKnowledges inspect =
-    inspect
-        |> Array.foldl
-            (\inspectSingle soFar ->
-                when inspectSingle is
-                    InspectDirectDependencies toKnowledge ->
-                        { directDependenciesToKnowledge =
-                            soFar.directDependenciesToKnowledge
-                                |> Array.Builder.pushLast toKnowledge
-                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
-                        , extraFileToKnowledge = soFar.extraFileToKnowledge
-                        , moduleToKnowledge = soFar.moduleToKnowledge
-                        }
-
-                    InspectGrenJson toKnowledge ->
-                        { grenJsonToKnowledge =
-                            soFar.grenJsonToKnowledge
-                                |> Array.Builder.pushLast toKnowledge
-                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
-                        , extraFileToKnowledge = soFar.extraFileToKnowledge
-                        , moduleToKnowledge = soFar.moduleToKnowledge
-                        }
-
-                    InspectExtraFile toKnowledge ->
-                        { extraFileToKnowledge =
-                            soFar.extraFileToKnowledge
-                                |> Array.Builder.pushLast toKnowledge
-                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
-                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
-                        , moduleToKnowledge = soFar.moduleToKnowledge
-                        }
-
-                    InspectModule toKnowledge ->
-                        { moduleToKnowledge =
-                            soFar.moduleToKnowledge
-                                |> Array.Builder.pushLast toKnowledge
-                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
-                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
-                        , extraFileToKnowledge = soFar.extraFileToKnowledge
-                        }
-            )
-            { directDependenciesToKnowledge = Array.Builder.empty 0
-            , grenJsonToKnowledge = Array.Builder.empty 0
-            , extraFileToKnowledge = Array.Builder.empty 0
-            , moduleToKnowledge = Array.Builder.empty 1
-            }
 
 
 dictRemoveKeys : Array comparableKey -> (Dict comparableKey v -> Dict comparableKey v)
