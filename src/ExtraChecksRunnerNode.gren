@@ -1,11 +1,11 @@
 module ExtraChecksRunnerNode exposing
-    ( program, Program
+    ( program, Program, initWith, update, subscriptions
     , ProgramEvent(..), ProgramState
     )
 
 {-|
 
-@docs program, Program
+@docs program, Program, initWith, update, subscriptions
 
 If you experience a high memory footprint in a large project,
 please open an issue called "only ask for file sources to generate local error displays".
@@ -14,8 +14,6 @@ That's all you need to know.
 Below are the internal types if you're interested:
 
 @docs ProgramEvent, ProgramState
-
-TODO expose
 
 -}
 
@@ -57,13 +55,13 @@ import Terminal
 import Bytes.Encode
 
 
-{-| An elm worker produced by [`ExtraCheck.Cli.Program`](ExtraCheck-Cli#Program)
+{-| A node program produced by [`ExtraChecksRunnerNode.program`](#Program)
 -}
 type alias Program =
     Node.Program ProgramState ProgramEvent
 
 
-{-| elm model of a [`ExtraCheck.program`](#program)
+{-| Model of a [`ExtraChecksRunnerNode.program`](#program)
 -}
 type ProgramState
     = Exited
@@ -81,7 +79,15 @@ type ProgramState
                     , region : SourcePosition.Region
                     , path : String
                     }
-                , otherErrors : Dict String (Array FileReviewError)
+                , otherErrors :
+                    Dict String
+                        (Array
+                            { region : SourcePosition.Region
+                            , message : String
+                            , details : Array String
+                            , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
+                            }
+                        )
                 }
         , grenJson : { source : String, outline : Compiler.Outline.Outline }
         , filesByPath : Dict String String
@@ -93,7 +99,7 @@ type ProgramState
         }
 
 
-{-| msg of a [`ExtraChecksRunnerNode.program`](#program)
+{-| Msg of a [`ExtraChecksRunnerNode.program`](#program)
 -}
 type ProgramEvent
     = ModuleWatchEvent { sourceDirectory : FileSystem.Path.Path, event : FileSystem.WatchEvent }
@@ -106,18 +112,62 @@ type ProgramEvent
     | Typed (Result Stream.Error Bytes.Bytes)
 
 
-{-| Run checks, re-running on file changes.
-To be used from a node.js CLI program
-as showcased in [gren-extra-checks-cli-starter](https://github.com/lue-bird/gren-extra-checks-cli-starter)
+{-| Fully assembled command line program to run checks, re-running on file changes.
+Use from a node gren project as the `main`.
+
+In projects where security is important,
+you can instead assemble the parts that define a [`ExtraChecksRunnerNode.program`](#program) yourself,
+for you to inspect and mess with:
+
+    program =
+        Node.defineProgram
+            { init =
+                \environment ->
+                    Init.await Terminal.initialize
+                        (\maybeTerminalConfiguration ->
+                            Init.await FileSystem.initialize
+                                (\fileSystemPermission ->
+                                    Init.awaitTask
+                                        (initWith config
+                                            { environment = environment
+                                            , terminalConfiguration = maybeTerminalConfiguration
+                                            , fileSystemPermission = fileSystemPermission
+                                            }
+                                        )
+                                        Node.startProgram
+                                )
+                        )
+            , update = \event state -> update config event state
+            , subscriptions = \state -> subscriptions config state
+            }
+
+Notice how `initWith` being a `Task` (not `Init.Task`) enforces that the program cannot itself
+attain new permissions, to for example reach out to the internet.
+
 -}
 program :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
     -> Program
 program config =
     Node.defineProgram
-        { init = \environment -> initialize config environment
-        , update = \event state -> state |> reactToEvent config event
-        , subscriptions = \state -> state |> subscribe config
+        { init =
+            \environment ->
+                Init.await Terminal.initialize
+                    (\maybeTerminalConfiguration ->
+                        Init.await FileSystem.initialize
+                            (\fileSystemPermission ->
+                                Init.awaitTask
+                                    (initWith config
+                                        { environment = environment
+                                        , terminalConfiguration = maybeTerminalConfiguration
+                                        , fileSystemPermission = fileSystemPermission
+                                        }
+                                    )
+                                    Node.startProgram
+                            )
+                    )
+        , update = \event state -> update config event state
+        , subscriptions = \state -> subscriptions config state
         }
 
 
@@ -350,149 +400,145 @@ compilerOutlineGrenVersionMinimum outline =
             pkg.grenVersion |> SemanticVersionRange.lowerBound
 
 
-taskSucceedToResult task =
-    task
-        |> Task.map Ok
-        |> Task.onError (\error -> Task.succeed (Err error))
+{-| The "starting up" part of a program definition for assembling yourself.
 
-
-initialize :
+Notice how `initWith` being a `Task` (not `Init.Task`) enforces that the program cannot itself
+attain new permissions, to for example reach out to the internet.
+-}
+initWith :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
-    -> Node.Environment
-    -> Init.Task { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
-initialize config environment =
-    Init.await Terminal.initialize <| \maybeTerminalConfig ->
-    Init.await FileSystem.initialize
-        (\fileSystemPermission ->
-            Init.awaitTask
-                (Task.succeed (\info {} -> info)
-                    |> Task.andMap
-                        (initialInfoTask
-                            { extraPaths = config.extraPaths
-                            , fileSystemPermission = fileSystemPermission
-                            , platform = environment.platform
+    -> { environment : Node.Environment
+       , terminalConfiguration : Maybe Terminal.Configuration
+       , fileSystemPermission : FileSystem.Permission
+       }
+    -> Task.Task Never { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
+initWith config { environment, terminalConfiguration = maybeTerminalConfiguration, fileSystemPermission } =
+    Task.succeed
+        (\initialInfoOrError {} ->
+            when initialInfoOrError is
+                Err error ->
+                    { model = Exited
+                    , command =
+                        Platform.Cmd.batch
+                            [ Stream.Log.line environment.stderr error |> taskExecute
+                            , Node.setExitCode 1 |> taskExecute
+                            ]
+                    }
+
+                Ok initialInfo ->
+                    when initialInfo.modules |> allModuleFilesToWithParsedSyntax is
+                        Err parseErrors ->
+                            -- it probably makes sense to instead stay in some
+                            -- "partially initialized state"
+                            -- and still watch for valid files to arrive
+                            { model = Exited
+                            , command =
+                                Platform.Cmd.batch
+                                    [ Stream.Log.line environment.stderr
+                                        (failedToParseModulesMessage parseErrors)
+                                        |> taskExecute
+                                    , Node.setExitCode 1 |> taskExecute
+                                    ]
                             }
-                        )
-                    |> Task.andMap
-                        (when maybeTerminalConfig is
-                            Nothing -> Task.succeed {}
-                            Just terminalConfig ->
-                                -- it would be nice to also listen for ctrl+c
-                                -- on init but I haven't found a way to do this
-                                -- since e.g. exit is not a Task or no Task.race primitive exists.
-                                -- Probably need to init to some uninitialized state that then fires these tasks
-                                Terminal.setStdInRawMode terminalConfig.permission True
-                        )
-                )
-                (\initialInfoOrError ->
-                    Node.startProgram
-                        (when initialInfoOrError is
-                            Err error ->
-                                { model = Exited
-                                , command =
-                                    Platform.Cmd.batch
-                                        [ Stream.Log.line environment.stderr error |> taskExecute
-                                        , Node.setExitCode 1 |> taskExecute
-                                        ]
-                                }
 
-                            Ok initialInfo ->
-                                when initialInfo.modules |> allModuleFilesToWithParsedSyntax is
-                                    Err parseErrors ->
-                                        -- it probably makes sense to instead stay in some
-                                        -- "partially initialized state"
-                                        -- and still watch for valid files to arrive
-                                        { model = Exited
-                                        , command =
-                                            Platform.Cmd.batch
-                                                [ Stream.Log.line environment.stderr
-                                                    (failedToParseModulesMessage parseErrors)
-                                                    |> taskExecute
-                                                , Node.setExitCode 1 |> taskExecute
-                                                ]
-                                        }
+                        Ok modules ->
+                            let
+                                initialFilesByPath : Dict String String
+                                initialFilesByPath =
+                                    Dict.union
+                                        (initialInfo.extraFiles
+                                            |> DictLocalExtra.fromArrayMap
+                                                (\file -> { key = file.path, value = file.source })
+                                        )
+                                        (initialInfo.modules
+                                            |> DictLocalExtra.fromArrayMap
+                                                (\file -> { key = file.path, value = file.source })
+                                        )
 
-                                    Ok modules ->
-                                        let
-                                            initialFilesByPath : Dict String String
-                                            initialFilesByPath =
-                                                Dict.union
-                                                    (initialInfo.extraFiles
-                                                        |> DictLocalExtra.fromArrayMap
-                                                            (\file -> { key = file.path, value = file.source })
-                                                    )
-                                                    (initialInfo.modules
-                                                        |> DictLocalExtra.fromArrayMap
-                                                            (\file -> { key = file.path, value = file.source })
-                                                    )
+                                runResult :
+                                    { errorsByPath : Dict String (Array FileReviewError)
+                                    , nextRuns : Array ExtraCheck.Run
+                                    }
+                                runResult =
+                                    { addedOrChangedModules = modules
+                                    , addedOrChangedExtraFiles = initialInfo.extraFiles
+                                    , directDependencies = initialInfo.directDependencies
+                                    , grenJson = initialInfo.grenJson
+                                    , removedExtraFilePaths = []
+                                    , removedModulePaths = []
+                                    }
+                                        |> reviewRunList config.checks
 
-                                            runResult :
-                                                { errorsByPath : Dict String (Array FileReviewError)
-                                                , nextRuns : Array ExtraCheck.Run
+                                maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                maybeNextFixableErrorOrAllUnfixable =
+                                    runResult.errorsByPath
+                                        |> errorsByPathToNextFixableErrorOrAll
+                                            { elmJsonSource = initialInfo.grenJson.source
+                                            , filesByPath = initialFilesByPath
+                                            }
+                            in
+                            { model =
+                                Running
+                                    { environment = environment
+                                    , fileSystemPermission = fileSystemPermission
+                                    , nextRuns = runResult.nextRuns
+                                    , fixableErrorsAwaitingResponse =
+                                        maybeNextFixableErrorOrAllUnfixable
+                                            |> Maybe.andThen fixableOrAllUnfixableToFixable
+                                    , grenJson = initialInfo.grenJson
+                                    , filesByPath = initialFilesByPath
+                                    , directDependencies = initialInfo.directDependencies
+                                    }
+                            , command =
+                                Platform.Cmd.batch
+                                    [ when maybeNextFixableErrorOrAllUnfixable is
+                                        Nothing ->
+                                            noErrorsWaitingForChanges
+                                                { stdin = environment.stdin
+                                                , stdout = environment.stdout
                                                 }
-                                            runResult =
-                                                { addedOrChangedModules = modules
-                                                , addedOrChangedExtraFiles = initialInfo.extraFiles
-                                                , directDependencies = initialInfo.directDependencies
-                                                , grenJson = initialInfo.grenJson
-                                                , removedExtraFilePaths = []
-                                                , removedModulePaths = []
-                                                }
-                                                    |> reviewRunList config.checks
 
-                                            maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
-                                            maybeNextFixableErrorOrAllUnfixable =
-                                                runResult.errorsByPath
-                                                    |> errorsByPathToNextFixableErrorOrAll
-                                                        { elmJsonSource = initialInfo.grenJson.source
-                                                        , filesByPath = initialFilesByPath
-                                                        }
-                                        in
-                                        { model =
-                                            Running
-                                                { environment = environment
-                                                , fileSystemPermission = fileSystemPermission
-                                                , nextRuns = runResult.nextRuns
-                                                , fixableErrorsAwaitingResponse =
-                                                    maybeNextFixableErrorOrAllUnfixable
-                                                        |> Maybe.andThen fixableOrAllUnfixableToFixable
-                                                , grenJson = initialInfo.grenJson
-                                                , filesByPath = initialFilesByPath
-                                                , directDependencies = initialInfo.directDependencies
+                                        Just nextFixableErrorOrAllUnfixable ->
+                                            errorsReceived
+                                                { fileSystemPermission = fileSystemPermission
+                                                , stdout = environment.stdout
                                                 }
-                                        , command =
-                                            Platform.Cmd.batch
-                                                [ when maybeNextFixableErrorOrAllUnfixable is
-                                                    Nothing ->
-                                                        noErrorsWaitingForChanges
-                                                            { stdin = environment.stdin
-                                                            , stdout = environment.stdout
-                                                            }
-
-                                                    Just nextFixableErrorOrAllUnfixable ->
-                                                        errorsReceived
-                                                            { fileSystemPermission = fileSystemPermission
-                                                            , stdout = environment.stdout
-                                                            }
-                                                            { projectFilesByPath =
-                                                                initialFilesByPath
-                                                                    |> Dict.set "gren.json" initialInfo.grenJson.source
-                                                            , errors = nextFixableErrorOrAllUnfixable
-                                                            }
-                                                , -- TODO not when outside of interactive shell, auto-reject in that case
-                                                  Stream.read environment.stdin |> Task.attempt Typed
-                                                ]
-                                        }
-                        )
-                )
+                                                { projectFilesByPath =
+                                                    initialFilesByPath
+                                                        |> Dict.set "gren.json" initialInfo.grenJson.source
+                                                , errors = nextFixableErrorOrAllUnfixable
+                                                }
+                                    , -- TODO not when outside of interactive shell, auto-reject in that case
+                                    Stream.read environment.stdin |> Task.attempt Typed
+                                    ]
+                            }
         )
+        |> Task.andMap
+            (initialInfoTask
+                { extraPaths = config.extraPaths
+                , fileSystemPermission = fileSystemPermission
+                , platform = environment.platform
+                }
+            )
+        |> Task.andMap
+            (when maybeTerminalConfiguration is
+                Nothing -> Task.succeed {}
+                Just terminalConfiguration ->
+                    -- it would be nice to also listen for ctrl+c
+                    -- on init but I haven't found a way to do this
+                    -- since e.g. exit is not a Task or no Task.race primitive exists.
+                    -- Probably need to init to some uninitialized state that then fires these tasks
+                    Terminal.setStdInRawMode terminalConfiguration.permission True
+            )
 
 
-subscribe :
+{-| The "listen to incoming events" part of a program definition for assembling yourself
+-}
+subscriptions :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
     -> ProgramState
     -> Platform.Sub.Sub ProgramEvent
-subscribe config stateOrExited =
+subscriptions config stateOrExited =
     when stateOrExited is
         Exited ->
             Platform.Sub.none
@@ -582,13 +628,14 @@ compilerOutlineDirectDependencies outline =
                     (Array.Builder.empty 1)
                 |> Array.Builder.toArray
 
-
-reactToEvent :
+{-| The "react to an incoming event" part of a program definition for assembling yourself
+-}
+update :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
     -> ProgramEvent
     -> ProgramState
     -> { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
-reactToEvent config event stateOrExited =
+update config event stateOrExited =
     when stateOrExited is
         Exited ->
             { model = Exited, command = Platform.Cmd.none }
@@ -1755,3 +1802,10 @@ or use the appropriate task (e.g. `Stream.Log.string` instead of a regular strea
 taskExecute : Task.Task Basics.Never {} -> Platform.Cmd.Cmd event_
 taskExecute task =
     task |> Task.execute
+
+
+taskSucceedToResult : Task.Task x a -> Task.Task Never (Result x a)
+taskSucceedToResult task =
+    task
+        |> Task.map Ok
+        |> Task.onError (\error -> Task.succeed (Err error))
