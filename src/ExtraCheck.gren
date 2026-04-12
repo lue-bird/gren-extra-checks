@@ -5,7 +5,7 @@ module ExtraCheck exposing
     , Error, grenJsonPath
     , SourceEdit(..), insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
-    , expressionImmediateSubsFold
+    , expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
     , moduleExposes, exposedArrayToExposes
     , sourceExtractInRange, sourceRegionsOf
     , outlineExposedModuleNameSet
@@ -72,7 +72,7 @@ This fine control allows you to e.g. skip visiting certain parts that you alread
 
 TODO add helper to traverse pattern and type and expression with introduced local bindings sub-AST located nodes
 
-@docs expressionImmediateSubsFold
+@docs expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
 @docs determineModuleOrigin, importsToExplicit
 @docs moduleExposes, exposedArrayToExposes
 @docs sourceExtractInRange, sourceRegionsOf
@@ -2828,7 +2828,80 @@ type alias FileCheckError =
     }
 
 
-{-| Walk immediate child-expressions, collecting information on the way.
+{-| Walk immediate child-patterns, collecting information on the way
+-}
+typeImmediateSubsFold :
+    (Compiler.Ast.Source.Type -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Type_
+    -> state
+typeImmediateSubsFold reduce initialState parentExpression =
+    when parentExpression is
+        Compiler.Ast.Source.TVar _ ->
+            initialState
+        Compiler.Ast.Source.TParens inParens ->
+            initialState |> reduce inParens
+        Compiler.Ast.Source.TLambda function ->
+            initialState |> reduce function.from |> reduce function.to
+        Compiler.Ast.Source.TType construct ->
+            construct.args |> Array.foldl reduce initialState
+        Compiler.Ast.Source.TTypeQual construct ->
+            construct.args |> Array.foldl reduce initialState
+        Compiler.Ast.Source.TRecord { fields, extending = _ } ->
+            fields
+                |> Array.foldl
+                    (\field soFar ->
+                        soFar |> reduce field.signature
+                    )
+                    initialState
+
+
+{-| Walk immediate child-patterns, collecting information on the way
+-}
+patternImmediateSubsFold :
+    (Compiler.Ast.Source.Pattern -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Pattern_
+    -> state
+patternImmediateSubsFold reduce initialState parentExpression =
+    when parentExpression is
+        Compiler.Ast.Source.PInt _ -> initialState
+        Compiler.Ast.Source.PChr _ -> initialState
+        Compiler.Ast.Source.PStr _ -> initialState
+        Compiler.Ast.Source.PAnything _ -> initialState
+        Compiler.Ast.Source.PVar _ -> initialState
+        Compiler.Ast.Source.PAlias alias -> initialState |> reduce alias.pattern
+        Compiler.Ast.Source.PCtor variant ->
+            when variant.arg is
+                Nothing ->
+                    initialState
+
+                Just value ->
+                    initialState |> reduce value
+        Compiler.Ast.Source.PCtorQual variant ->
+            when variant.arg is
+                Nothing ->
+                    initialState
+
+                Just value ->
+                    initialState |> reduce value
+        Compiler.Ast.Source.PArray elements ->
+            elements |> Array.foldl reduce initialState
+        Compiler.Ast.Source.PRecord fields ->
+            fields
+                |> Array.foldl
+                    (\field soFar ->
+                        when field.pattern is
+                            Nothing ->
+                                soFar
+
+                            Just fieldValue ->
+                                soFar |> reduce fieldValue
+                    )
+                    initialState
+
+
+{-| Walk immediate child-expressions, collecting information on the way
 -}
 expressionImmediateSubsFold :
     (Compiler.Ast.Source.Expression -> state -> state)
