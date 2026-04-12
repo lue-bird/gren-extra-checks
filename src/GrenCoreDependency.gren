@@ -1,0 +1,3563 @@
+{- contains parts of the source code of gren-lang/core
+in the multiline string literals. gren-lang/core is licensed under:
+
+Original work Copyright 2014-2022 Evan Czaplicki
+Modified work Copyright 2022-present The Gren CONTRIBUTORS
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+-}
+
+module GrenCoreDependency exposing (grenJson, modulePathsAndSources)
+
+
+import Json.Decode
+import Compiler.Ast.Source
+import Compiler.Outline
+import Json.Decode
+import SourcePosition
+import String.Parser.Advanced
+import Compiler.Parse.Type
+import Compiler.Parse.Context
+import Compiler.Parse.Module
+import Compiler.Platform
+import Compiler.License
+import SemanticVersionRange
+import Dict
+import Compiler.PackageName
+
+
+modulePathsAndSources : Array { source : String, path : String }
+modulePathsAndSources =
+    modules
+        |> Array.map (\mod -> { path = mod.path, source = mod.source })
+
+
+modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+modules =
+    -- should probably also add Debug, Platform, Platform.Cmd, Platform.Sub
+    [ basicsSource, arraySource, maybeSource, resultSource, charSource, stringSource ]
+        |> Array.mapAndKeepJust
+            (\source ->
+                source
+                    |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty
+                    |> Result.toMaybe
+                    |> Maybe.map
+                        (\syntax ->
+                            { source = source
+                            , path = "src/" ++ (syntax.name.value |> String.replace "." "/") ++ ".gren"
+                            , syntax = syntax
+                            }
+                        )
+            )
+
+grenJson =
+    """
+    {
+        "type": "package",
+        "platform": "common",
+        "name": "gren-lang/core",
+        "summary": "Gren's core modules",
+        "license": "BSD-3-Clause",
+        "version": "7.4.0",
+        "exposed-modules": {
+            "Bytes": [
+                "Bytes",
+                "Bytes.Encode",
+                "Bytes.Decode"
+            ],
+            "Collections": [
+                "Array",
+                "Array.Builder",
+                "Dict",
+                "Set"
+            ],
+            "Crypto": [
+                "Crypto"
+            ],
+            "Debug": [
+                "Debug"
+            ],
+            "Effects": [
+                "Platform",
+                "Platform.Cmd",
+                "Platform.Sub",
+                "Process",
+                "Task"
+            ],
+            "Error Handling": [
+                "Maybe",
+                "Result"
+            ],
+            "Json": [
+                "Json.Decode",
+                "Json.Encode"
+            ],
+            "Primitives": [
+                "Basics",
+                "String",
+                "Char",
+                "Bitwise",
+                "Math"
+            ],
+            "Random": [
+                "Random"
+            ],
+            "Streams": [
+                "Stream",
+                "Stream.Log"
+            ],
+            "Strings": [
+                "String.Regex",
+                "String.Parser",
+                "String.Parser.Advanced"
+            ],
+            "Time": [
+                "Time"
+            ]
+        },
+        "gren-version": "0.6.0 <= v < 0.7.0",
+        "dependencies": {}
+    }
+    """
+
+basicsSource =
+    """
+    module Basics exposing
+        ( Int, (+), (-), (*), (/), (//), (^), negate
+        , Float, toFloat, isNaN, isInfinite
+        , (==), (/=)
+        , (<), (>), (<=), (>=), max, min, clamp, compare, Order(..)
+        , Bool(..), not, (&&), (||), xor
+        , (++)
+        , identity, (<|), (|>), (<<), (>>), Never, never
+        )
+
+    {-| Tons of useful functions that get imported by default.
+
+
+    ## Numbers
+
+    @docs Int, (+), (-), (*), (/), (//), (^), negate
+
+
+    ## Float
+
+    @docs Float, toFloat, isNaN, isInfinite
+
+
+    ## Equality
+
+    @docs (==), (/=)
+
+
+    ## Comparison
+
+    These functions only work on `comparable` types. This includes numbers,
+    characters, strings and arrays of comparable things.
+
+    @docs Order, (<), (>), (<=), (>=), max, min, clamp, compare
+
+
+    ## Booleans
+
+    @docs Bool, not, (&&), (||), xor
+
+
+    ## Append Strings and Arrays
+
+    @docs (++)
+
+
+    ## Function Helpers
+
+    @docs identity, (<|), (|>), (<<), (>>), Never, never
+
+    -}
+
+    import Gren.Kernel.Basics
+    import Gren.Kernel.Utils
+
+
+
+    -- INFIX OPERATORS
+
+
+    infix right 0 (<|) = apL
+    infix left  0 (|>) = apR
+    infix right 2 (||) = or
+    infix right 3 (&&) = and
+    infix non   4 (==) = eq
+    infix non   4 (/=) = neq
+    infix non   4 (<) = lt
+    infix non   4 (>) = gt
+    infix non   4 (<=) = le
+    infix non   4 (>=) = ge
+    infix right 5 (++) = append
+    infix left  6 (+) = add
+    infix left  6 (-) = sub
+    infix left  7 (*) = mul
+    infix left  7 (/) = fdiv
+    infix left  7 (//) = idiv
+    infix right 8 (^) = pow
+    infix left  9 (<<) = composeL
+    infix right 9 (>>) = composeR
+
+
+
+    -- MATHEMATICS
+
+
+    {-| An `Int` is a whole number. Valid syntax for integers includes:
+
+        0
+
+        42
+
+        9000
+
+        0xFF -- 255 in hexadecimal
+
+        0x0A --  10 in hexadecimal
+
+    **Note:** `Int` math is well-defined in the range `-2^31` to `2^31 - 1`. Outside
+    of that range, the behavior is determined by the compilation target. When
+    generating JavaScript, the safe range expands to `-(2^53 - 1)` to `2^53 - 1` for some
+    operations, but if we generate WebAssembly some day, we would do the traditional
+    [integer overflow][io]. This quirk is necessary to get good performance on
+    quirky compilation targets.
+
+    **Historical Note:** The name `Int` comes from the term [integer]. It appears
+    that the `int` abbreviation was introduced in [ALGOL 68][68], shortening it
+    from `integer` in [ALGOL 60][60]. Today, almost all programming languages use
+    this abbreviation.
+
+    [io]: https://en.wikipedia.org/wiki/Integer_overflow
+    [integer]: https://en.wikipedia.org/wiki/Integer
+    [60]: https://en.wikipedia.org/wiki/ALGOL_60
+    [68]: https://en.wikipedia.org/wiki/ALGOL_68
+
+    -}
+    type Int
+        = Int -- NOTE: The compiler provides the real implementation.
+
+
+    {-| A `Float` is a [floating-point number][fp]. Valid syntax for floats includes:
+
+        0
+        42
+        3.14
+        0.1234
+        6.022e23   -- == (6.022 * 10^23)
+        6.022e+23  -- == (6.022 * 10^23)
+        1.602e−19  -- == (1.602 * 10^-19)
+        1e3        -- == (1 * 10^3) == 1000
+
+    **Historical Note:** The particular details of floats (e.g. `NaN`) are
+    specified by [IEEE 754][ieee] which is literally hard-coded into almost all
+    CPUs in the world. That means if you think `NaN` is weird, you must
+    successfully overtake Intel and AMD with a chip that is not backwards
+    compatible with any widely-used assembly language.
+
+    [fp]: https://en.wikipedia.org/wiki/Floating-point_arithmetic
+    [ieee]: https://en.wikipedia.org/wiki/IEEE_754
+
+    -}
+    type Float
+        = Float -- NOTE: The compiler provides the real implementation.
+
+
+    {-| Add two numbers. The `number` type variable means this operation can be
+    specialized to `Int -> Int -> Int` or to `Float -> Float -> Float`. So you
+    can do things like this:
+
+        3002 + 4004 == 7006 -- all ints
+
+        3.14 + 3.14 == 6.28 -- all floats
+
+    You _cannot_ add an `Int` and a `Float` directly though. Use functions like
+    [toFloat](#toFloat) or [round](#round) to convert both values to the same type.
+    So if you needed to add a array length to a `Float` for some reason, you
+    could say one of these:
+
+        3.14 + toFloat (Array.length [ 1, 2, 3 ]) == 6.14
+
+        round 3.14 + Array.length [ 1, 2, 3 ] == 6
+
+    **Note:** Languages like Java and JavaScript automatically convert `Int` values
+    to `Float` values when you mix and match. This can make it difficult to be sure
+    exactly what type of number you are dealing with. When you try to _infer_ these
+    conversions (as Scala does) it can be even more confusing. Gren has opted for a
+    design that makes all conversions explicit.
+
+    -}
+    add : number -> number -> number
+    add =
+        Gren.Kernel.Basics.add
+
+
+    {-| Subtract numbers like `4 - 3 == 1`.
+
+    See [`(+)`](#+) for docs on the `number` type variable.
+
+    -}
+    sub : number -> number -> number
+    sub =
+        Gren.Kernel.Basics.sub
+
+
+    {-| Multiply numbers like `2 * 3 == 6`.
+
+    See [`(+)`](#+) for docs on the `number` type variable.
+
+    -}
+    mul : number -> number -> number
+    mul =
+        Gren.Kernel.Basics.mul
+
+
+    {-| Floating-point division:
+
+        10 / 4 == 2.5
+
+        11 / 4 == 2.75
+
+        12 / 4 == 3
+
+        13 / 4 == 3.25
+
+        14
+            / 4
+            == 3.5
+            - 1
+            / 4
+            == -0.25
+            - 5
+            / 4
+            == -1.25
+
+    -}
+    fdiv : Float -> Float -> Float
+    fdiv =
+        Gren.Kernel.Basics.fdiv
+
+
+    {-| Integer division:
+
+        10 // 4 == 2
+
+        11 // 4 == 2
+
+        12 // 4 == 3
+
+        13 // 4 == 3
+
+        14
+            // 4
+            == 3
+            - 1
+            // 4
+            == 0
+            - 5
+            // 4
+            == -1
+
+    Notice that the remainder is discarded, so `3 // 4` is giving output
+    similar to `truncate (3 / 4)`.
+
+    It may sometimes be useful to pair this with the [`remainderBy`](#remainderBy)
+    function.
+
+    -}
+    idiv : Int -> Int -> Int
+    idiv =
+        Gren.Kernel.Basics.idiv
+
+
+    {-| Exponentiation
+
+        3 ^ 2 == 9
+
+        3 ^ 3 == 27
+
+    -}
+    pow : number -> number -> number
+    pow =
+        Gren.Kernel.Basics.pow
+
+
+    {-| Negate a number.
+
+        negate 42 == -42
+
+        negate -42 == 42
+
+        negate 0 == 0
+
+    -}
+    negate : number -> number
+    negate n =
+        -n
+
+
+    -- INT TO FLOAT / FLOAT TO INT
+
+
+    {-| Convert an integer into a float. Useful when mixing `Int` and `Float`
+    values like this:
+
+        halfOf : Int -> Float
+        halfOf number =
+            toFloat number / 2
+
+    -}
+    toFloat : Int -> Float
+    toFloat =
+        Gren.Kernel.Basics.toFloat
+
+
+
+    -- EQUALITY
+
+
+    {-| Check if values are &ldquo;the same&rdquo;.
+
+    **Note:** Gren uses structural equality on tuples, records, and user-defined
+    union types. This means the values `(3, 4)` and `(3, 4)` are definitely equal.
+    This is not true in languages like JavaScript that use reference equality on
+    objects.
+
+    **Note:** Do not use `(==)` with functions, JSON values from `gren/json`, or
+    regular expressions from `gren/regex`. It does not work. It will crash if
+    possible. With JSON values, decode to Gren values before doing any equality
+    checks!
+
+    Why is it like this? Equality in the Gren sense can be difficult or impossible
+    to compute. Proving that functions are the same is [undecidable], and JSON
+    values can come in through ports and have functions, cycles, and new JS data
+    types that interact weirdly with our equality implementation. In a future
+    release, the compiler will detect when `(==)` is used with problematic types
+    and provide a helpful error message at compile time. This will require some
+    pretty serious infrastructure work, so the stopgap is to crash as quickly as
+    possible.
+
+    [undecidable]: https://en.wikipedia.org/wiki/Undecidable_problem
+
+    -}
+    eq : a -> a -> Bool
+    eq =
+        Gren.Kernel.Utils.equal
+
+
+    {-| Check if values are not &ldquo;the same&rdquo;.
+
+    So `(a /= b)` is the same as `(not (a == b))`.
+
+    -}
+    neq : a -> a -> Bool
+    neq =
+        Gren.Kernel.Utils.notEqual
+
+
+
+    -- COMPARISONS
+
+
+    {-| -}
+    lt : comparable -> comparable -> Bool
+    lt =
+        Gren.Kernel.Utils.lt
+
+
+    {-| -}
+    gt : comparable -> comparable -> Bool
+    gt =
+        Gren.Kernel.Utils.gt
+
+
+    {-| -}
+    le : comparable -> comparable -> Bool
+    le =
+        Gren.Kernel.Utils.le
+
+
+    {-| -}
+    ge : comparable -> comparable -> Bool
+    ge =
+        Gren.Kernel.Utils.ge
+
+
+    {-| Find the smaller of two comparables.
+
+        min 42 12345678 == 42
+
+        min "abc" "xyz" == "abc"
+
+    -}
+    min : comparable -> comparable -> comparable
+    min x y =
+        if lt x y then
+            x
+
+        else
+            y
+
+
+    {-| Find the larger of two comparables.
+
+        max 42 12345678 == 12345678
+
+        max "abc" "xyz" == "xyz"
+
+    -}
+    max : comparable -> comparable -> comparable
+    max x y =
+        if gt x y then
+            x
+
+        else
+            y
+
+
+    {-| Clamps a number within a given range. With the expression
+    `clamp 100 200 x` the results are as follows:
+
+        100     if x < 100
+        x      if 100 <= x < 200
+        200     if 200 <= x
+
+    -}
+    clamp : number -> number -> number -> number
+    clamp low high number =
+        if lt number low then
+            low
+
+        else if gt number high then
+            high
+
+        else
+            number
+
+
+    {-| Compare any two comparable values. Comparable values include `String`,
+    `Char`, `Int`, `Float`, or an array or tuple containing comparable values. These
+    are also the only values that work as `Dict` keys or `Set` members.
+
+        compare 3 4 == LT
+
+        compare 4 4 == EQ
+
+        compare 5 4 == GT
+
+    -}
+    compare : comparable -> comparable -> Order
+    compare =
+        Gren.Kernel.Utils.compare
+
+
+    {-| Represents the relative ordering of two things.
+    The relations are less than, equal to, and greater than.
+    -}
+    type Order
+        = LT
+        | EQ
+        | GT
+
+
+
+    -- BOOLEANS
+
+
+    {-| A “Boolean” value. It can either be `True` or `False`.
+
+    **Note:** Programmers coming from JavaScript, Java, etc. tend to reach for
+    boolean values way too often in Gren. Using a [union type][ut] is often clearer
+    and more reliable. You can learn more about this from Jeremy [here][jf] or
+    from Richard [here][rt].
+
+    [ut]: https://guide.gren-lang.org/types/union_types.html
+    [jf]: https://youtu.be/6TDKHGtAxeg?t=1m25s
+    [rt]: https://youtu.be/IcgmSRJHu_8?t=1m14s
+
+    -}
+    type Bool
+        = True
+        | False
+
+
+    {-| Negate a boolean value.
+
+        not True == False
+
+        not False == True
+
+    -}
+    not : Bool -> Bool
+    not =
+        Gren.Kernel.Basics.not
+
+
+    {-| The logical AND operator. `True` if both inputs are `True`.
+
+        True && True == True
+
+        True && False == False
+
+        False && True == False
+
+        False && False == False
+
+    **Note:** When used in the infix position, like `(left && right)`, the operator
+    short-circuits. This means if `left` is `False` we do not bother evaluating `right`
+    and just return `False` overall.
+
+    -}
+    and : Bool -> Bool -> Bool
+    and =
+        Gren.Kernel.Basics.and
+
+
+    {-| The logical OR operator. `True` if one or both inputs are `True`.
+
+        True || True == True
+
+        True || False == True
+
+        False || True == True
+
+        False || False == False
+
+    **Note:** When used in the infix position, like `(left || right)`, the operator
+    short-circuits. This means if `left` is `True` we do not bother evaluating `right`
+    and just return `True` overall.
+
+    -}
+    or : Bool -> Bool -> Bool
+    or =
+        Gren.Kernel.Basics.or
+
+
+    {-| The exclusive-or operator. `True` if exactly one input is `True`.
+
+        xor True True == False
+
+        xor True False == True
+
+        xor False True == True
+
+        xor False False == False
+
+    -}
+    xor : Bool -> Bool -> Bool
+    xor =
+        Gren.Kernel.Basics.xor
+
+
+
+    -- APPEND
+
+
+    {-| Put two appendable things together. This includes strings and arrays.
+
+        "hello" ++ "world" == "helloworld"
+
+        [ 1, 1, 2 ] ++ [ 3, 5, 8 ] == [ 1, 1, 2, 3, 5, 8 ]
+
+    -}
+    append : appendable -> appendable -> appendable
+    append =
+        Gren.Kernel.Utils.append
+
+
+
+    -- CRAZY FLOATS
+
+
+    {-| Determine whether a float is an undefined or unrepresentable number.
+    NaN stands for _not a number_ and it is [a standardized part of floating point
+    numbers](https://en.wikipedia.org/wiki/NaN).
+
+        isNaN (0 / 0) == True
+
+        isNaN (sqrt -1) == True
+
+        isNaN (1 / 0) == False -- infinity is a number
+
+        isNaN 1 == False
+
+    -}
+    isNaN : Float -> Bool
+    isNaN =
+        Gren.Kernel.Basics.isNaN
+
+
+    {-| Determine whether a float is positive or negative infinity.
+
+        isInfinite (0 / 0) == False
+
+        isInfinite (sqrt -1) == False
+
+        isInfinite (1 / 0) == True
+
+        isInfinite 1 == False
+
+    Notice that NaN is not infinite! For float `n` to be finite implies that
+    `not (isInfinite n || isNaN n)` evaluates to `True`.
+
+    -}
+    isInfinite : Float -> Bool
+    isInfinite =
+        Gren.Kernel.Basics.isInfinite
+
+
+
+    -- FUNCTION HELPERS
+
+
+    {-| Function composition, passing results along in the suggested direction. For
+    example, the following code checks if the result of rounding a float is odd:
+
+        not << isEven << round
+
+    You can think of this operator as equivalent to the following:
+
+        (g << f) == (\\x -> g (f x))
+
+    So our example expands out to something like this:
+
+        \\n -> not (isEven (round n))
+
+    -}
+    composeL : (b -> c) -> (a -> b) -> (a -> c)
+    composeL g f =
+        \\x -> g (f x)
+
+
+    {-| Function composition, passing results along in the suggested direction. For
+    example, the following code checks if the result of rounding a float is odd:
+
+        round >> isEven >> not
+
+    -}
+    composeR : (a -> b) -> (b -> c) -> (a -> c)
+    composeR f g =
+        \\x -> g (f x)
+
+
+    {-| Saying `x |> f` is exactly the same as `f x`.
+
+    It is called the “pipe” operator because it lets you write “pipelined” code.
+    For example, say we have a `sanitize` function for turning user input into
+    integers:
+
+        -- BEFORE
+        sanitize : String -> Maybe Int
+        sanitize input =
+            String.toInt (String.trim input)
+
+    We can rewrite it like this:
+
+        -- AFTER
+        sanitize : String -> Maybe Int
+        sanitize input =
+            input
+                |> String.trim
+                |> String.toInt
+
+    Totally equivalent! I recommend trying to rewrite code that uses `x |> f`
+    into code like `f x` until there are no pipes left. That can help you build
+    your intuition.
+
+    **Note:** This can be overused! I think folks find it quite neat, but when you
+    have three or four steps, the code often gets clearer if you break out a
+    top-level helper function. Now the transformation has a name. The arguments are
+    named. It has a type annotation. It is much more self-documenting that way!
+    Testing the logic gets easier too. Nice side benefit!
+
+    -}
+    apR : a -> (a -> b) -> b
+    apR x f =
+        f x
+
+
+    {-| Saying `f <| x` is exactly the same as `f x`.
+
+    It can help you avoid parentheses, which can be nice sometimes. Maybe you want
+    to apply a function to a `case` expression? That sort of thing.
+
+    -}
+    apL : (a -> b) -> a -> b
+    apL f x =
+        f x
+
+
+    {-| Given a value, returns exactly the same value. This is called
+    [the identity function](https://en.wikipedia.org/wiki/Identity_function).
+    -}
+    identity : a -> a
+    identity x =
+        x
+
+
+    {-| A value that can never happen! For context:
+
+    - The boolean type `Bool` has two values: `True` and `False`
+    - The unit type `()` has one value: `()`
+    - The never type `Never` has no values!
+
+    You may see it in the wild in `Html Never` which means this HTML will never
+    produce any messages. You would need to write an event handler like
+    `onClick ??? : Attribute Never` but how can we fill in the question marks?!
+    So there cannot be any event handlers on that HTML.
+
+    You may also see this used with tasks that never fail, like `Task Never ()`.
+
+    The `Never` type is useful for restricting _arguments_ to a function. Maybe my
+    API can only accept HTML without event handlers, so I require `Html Never` and
+    users can give `Html msg` and everything will go fine. Generally speaking, you
+    do not want `Never` in your return types though.
+
+    -}
+    type Never
+        = JustOneMore Never
+
+
+    {-| A function that can never be called. Seems extremely pointless, but it
+    _can_ come in handy. Imagine you have some HTML that should never produce any
+    messages. And say you want to use it in some other HTML that _does_ produce
+    messages. You could say:
+
+        import Html exposing (..)
+
+        embedHtml : Html Never -> Html msg
+        embedHtml staticStuff =
+            div []
+                [ text "hello"
+                , Html.map never staticStuff
+                ]
+
+    So the `never` function is basically telling the type system, make sure no one
+    ever calls me!
+
+    -}
+    never : Never -> a
+    never (JustOneMore nvr) =
+        never nvr
+    """
+
+arraySource =
+    """
+    module Array exposing
+        ( Array
+        , singleton, initialize, repeat, range
+        , map, indexedMap, foldl, foldr, indexedFoldl, indexedFoldr, keepIf, indexedKeepIf, mapAndKeepJust, reverse
+        , isEmpty, length, get, findFirst, findLast, member, any, all, minimum, maximum
+        , set, setMany, update, insert, insertMany, remove, removeMany, pushFirst, pushLast, splice
+        , prepend, append, flatten, mapAndFlatten, intersperse, map2, map3
+        , first, last, slice, dropFirst, dropLast, takeFirst, takeLast, popFirst, popLast, partition
+        , sort, sortBy, sortWith
+        )
+
+    {-| You can create an `Array` using the `[1, 2, 3]` syntax. This module has a bunch of
+    functions to help you work with them.
+
+    @docs Array
+
+    @docs singleton, initialize, repeat, range
+
+
+    ## Transform
+
+    @docs map, indexedMap, foldl, foldr, indexedFoldl, indexedFoldr, keepIf, indexedKeepIf, mapAndKeepJust, reverse
+
+
+    ## Query
+
+    @docs isEmpty, length, get, first, last, findFirst, findLast, member, any, all, minimum, maximum
+
+
+    ## Modify
+
+    @docs set, setMany, update, insert, insertMany, remove, removeMany, pushFirst, pushLast, splice
+
+
+    ## Combine
+
+    @docs prepend, append, flatten, mapAndFlatten, intersperse, map2, map3
+
+
+    ## Deconstruct
+
+    @docs slice, takeFirst, takeLast, dropFirst, dropLast, popFirst, popLast, partition
+
+
+    ## Sort
+
+    @docs sort, sortBy, sortWith
+
+
+    -}
+
+    import Basics exposing (..)
+    import Maybe exposing (Maybe(..))
+    import Gren.Kernel.Array
+
+
+    {-| An Array is an ordered collection of elements.
+    -}
+    type Array a
+        = Array a
+
+
+    -- CREATE
+
+
+    {-| Create an array containing a single value.
+    -}
+    singleton : a -> Array a
+    singleton a =
+        [ a ]
+
+
+    {-| Create an array of `n` elements, containing the elements
+    resulting from calling `fn` with `offset + index`.
+
+        initialize 3 5 identity == [ 5, 6, 7 ]
+
+    In the above example, we create an array containing 3 integers
+    starting at 5.
+    -}
+    initialize : Int -> Int -> (Int -> a) -> Array a
+    initialize =
+        Gren.Kernel.Array.initialize
+
+
+    {-| Create an array with `n` copies of a value:
+
+        repeat 5 3 == [ 3, 3, 3, 3, 3 ]
+
+    -}
+    repeat : Int -> a -> Array a
+    repeat n val =
+        initialize n 0 (\\_ -> val)
+
+
+    {-| Create an array of numbers, every element increasing by one. You give the lowest and highest number that should be in the array.
+
+        range 3 6 == [3, 4, 5, 6]
+        range 3 3 == [3]
+        range 6 3 == []
+
+    -}
+    range : Int -> Int -> Array Int
+    range from to =
+        if from > to then
+            []
+
+        else if from == to then
+            [from]
+
+        else 
+            initialize (to - from + 1) from identity
+
+
+    -- TRANSFORM
+
+
+    {-| Apply a function on every element in an array.
+
+        map negate [ 1, 4, 9 ] == [ -1, -4, -9 ]
+
+    So `map func [ a, b, c ]` is the same as `[ func a, func b, func c ]`
+
+    -}
+    map : (a -> b) -> Array a -> Array b
+    map =
+        Gren.Kernel.Array.map
+
+
+    {-| Same as `map` but the function is also applied to the index of each element.
+
+        indexedMap (\\idx val -> [idx, val]) [ 3, 3, 3 ] == [ [ 0, 3 ], [ 1, 3 ], [ 2, 3 ] ]
+
+    -}
+    indexedMap : (Int -> a -> b) -> Array a -> Array b
+    indexedMap =
+        Gren.Kernel.Array.indexedMap
+
+
+    {-| Reduce the array from the left.
+
+        foldl (+) 0 [ 1, 2, 3 ] == 6
+
+    So `foldl step state [ 1, 2, 3 ]` is like saying:
+
+        state
+            |> step 1
+            |> step 2
+            |> step 3
+    -}
+    foldl : (a -> b -> b) -> b -> Array a -> b
+    foldl =
+        Gren.Kernel.Array.foldl
+
+
+    {-| Reduce the array from the right. Same as `foldl` but
+    the execution order is reversed.
+    -}
+    foldr : (a -> b -> b) -> b -> Array a -> b
+    foldr =
+        Gren.Kernel.Array.foldr
+
+
+    {-| Reduce the array from the left. The reducing function is 
+    passed the index of the current value.
+
+        indexedFoldl (\\idx val sum -> idx + val + sum) 0 [ 1, 2, 3 ] == 9
+
+    -}
+    indexedFoldl : (Int -> a -> b -> b) -> b -> Array a -> b
+    indexedFoldl =
+        Gren.Kernel.Array.indexedFoldl
+
+
+    {-| Reduce the array from the right. The reducing function
+    is passed the index of the current value. Same as `indexedFoldl`
+    but the execution order is reversed.
+    -}
+    indexedFoldr : (Int -> a -> b -> b) -> b -> Array a -> b
+    indexedFoldr =
+        Gren.Kernel.Array.indexedFoldr
+
+
+    {-| Keep values that pass the test.
+
+        keepIf (\\n -> n < 3) [ 1, 2, 3, 4 ] == [ 1, 2 ]
+
+    -}
+    keepIf : (a -> Bool) -> Array a -> Array a
+    keepIf =
+        Gren.Kernel.Array.filter
+
+    {-| Same as `keepIf` but the test is also applied to the index of each element.
+
+        indexedKeepIf (\\idx val -> idx + val > 4) [ 1, 2, 3, 4 ] == [ 3, 4 ]
+    -}
+    indexedKeepIf : (Int -> a -> Bool) -> Array a -> Array a
+    indexedKeepIf =
+        Gren.Kernel.Array.indexedFilter
+
+
+    {-| Remove unwanted results of a map operation.
+
+        mapAndKeepJust String.toInt [ "3", "not a number", "-5" ] == [ 3, -5 ]
+        mapAndKeepJust identity [ Just 1, Nothing ] == [ 1 ]
+
+    -}
+    mapAndKeepJust : (a -> Maybe b) -> Array a -> Array b
+    mapAndKeepJust mapper array =
+        mapAndFlatten
+            (\\v ->
+                when mapper v is
+                    Just newValue ->
+                        [ newValue ]
+
+                    Nothing ->
+                        []
+            )
+            array
+
+
+    {-| Reverse an array.
+
+        reverse [ 1, 2, 3 ] == [ 3, 2, 1 ]
+
+    -}
+    reverse : Array a -> Array a
+    reverse =
+        Gren.Kernel.Array.reverse
+
+
+    -- QUERY
+
+
+    {-| Check if an array is empty.
+
+        isEmpty [] == True
+        isEmpty [ 1, 2, 3 ] == False
+
+    -}
+    isEmpty : Array a -> Bool
+    isEmpty array =
+        length array == 0
+
+
+    {-| Return the length of an array.
+
+        length [ 1, 2, 3 ] == 3
+
+    -}
+    length : Array a -> Int
+    length =
+        Gren.Kernel.Array.length
+
+
+    {-| Retrieve the element at a given index, or `Nothing` if the index is out of bounds.
+    A negative index looks up an element in reverse from the end of the array.
+
+        get 1 [ 1, 2, 3 ] == Just 2
+        get 10 [ 1, 2, 3 ] == Nothing
+        get -1 [ 1, 2, 3 ] == Just 3
+
+    -}
+    get : Int -> Array a -> Maybe a
+    get =
+        Gren.Kernel.Array.get
+
+
+    {-| Find the first value that passes the test.
+
+        findFirst (\\n -> n > 0) [ -1, 0, 1, 2 ] == Just { index = 2, value = 1 }
+
+    -}
+    findFirst : (a -> Bool) -> Array a -> Maybe { index : Int, value : a }
+    findFirst =
+        Gren.Kernel.Array.findFirst
+
+
+    {-| Find the last value that passes the test.
+
+        findLast (\\n -> n > 0) [ -1, 0, 1, 2 ] == Just { index = 3, value = 2 }
+
+    -}
+    findLast : (a -> Bool) -> Array a -> Maybe { index : Int, value : a }
+    findLast =
+        Gren.Kernel.Array.findLast
+
+
+    {-| Figure out whether an array contains a value.
+
+        member 9 [1,2,3,4] == False
+        member 4 [1,2,3,4] == True
+
+    -}
+    member : a -> Array a -> Bool
+    member value array =
+        when findFirst (\\v -> v == value) array is
+            Just _ ->
+                True
+
+            Nothing ->
+                False
+
+
+    {-| Determine if any elements pass the test.
+
+        any isEven [2,3] == True
+        any isEven [1,3] == False
+        any isEven [] == False
+
+    -}
+    any : (a -> Bool) -> Array a -> Bool
+    any fn array =
+        when findFirst fn array is
+            Just _ ->
+                True
+
+            Nothing ->
+                False
+
+
+    {-| Determine if all elements pass the test.
+
+        all isEven [2,4] == True
+        all isEven [2,3] == False
+        all isEven [] == True
+
+    -}
+    all : (a -> Bool) -> Array a -> Bool
+    all fn array =
+        when findFirst (not << fn) array is
+            Just _ ->
+                False
+
+            Nothing ->
+                True
+
+
+    {-| Find the minimum element in a non-empty array.
+
+        minimum [3,2,1] == Just 1
+        minimum []      == Nothing
+
+    -}
+    minimum : Array comparable -> Maybe comparable
+    minimum array =
+        when first array is
+            Nothing ->
+                Nothing
+
+            Just val ->
+                Just <|
+                    foldl
+                        (\\current lowest ->
+                            if current < lowest then
+                                current
+
+                            else
+                                lowest
+                        )
+                        val
+                        array
+
+
+    {-| Find the maximum element in a non-empty array.
+
+        maximum [3,2,1] == Just 3
+        maximum []      == Nothing
+
+    -}
+    maximum : Array comparable -> Maybe comparable
+    maximum array =
+        when first array is
+            Nothing ->
+                Nothing
+
+            Just val ->
+                Just <|
+                    foldl
+                        (\\current highest ->
+                            if current > highest then
+                                current
+
+                            else
+                                highest
+                        )
+                        val
+                        array
+
+
+    -- MODIFY
+
+
+    {-| Replace the element at the given index, or return the array unmodified if the index is out of bounds.
+    Passing a negative index means you want to replace an element counting backwards from the end of the array.
+
+        set 1 10 [ 1, 2, 3 ] == [ 1, 10, 3 ]
+        set 10 10 [ 1, 2, 3 ] == [ 1, 2, 3 ]
+        set -1 10 [ 1, 2, 3 ] == [ 1, 2, 10 ]
+
+    -}
+    set : Int -> a -> Array a -> Array a
+    set =
+        Gren.Kernel.Array.set
+
+
+    {-| This function works just like [set](#set) except it takes in an array of values to set, allowing you
+    to replace several values at once.
+
+    If the provided index is out of bounds, elements will be added at the beginning (negative index) or at the
+    end (positive index).
+
+        setMany 1 [ 0, 0 ] [ 1, 2, 3, 4 ] == [ 1, 0, 0, 4 ]
+
+    -}
+    setMany : Int -> Array a -> Array a -> Array a
+    setMany index values array =
+        splice index (length values) values array
+
+
+    {-| Update a value at the given index using a function. If the index is out of bounds, nothing happens.
+
+        update 1 (\\n -> n + 1) [ 1, 2, 3 ] == [ 1, 3, 3 ]
+        update 10 (\\n -> n + 1) [ 1, 2, 3 ] == [ 1, 2, 3 ]
+
+    -}
+    update : Int -> (a -> a) -> Array a -> Array a
+    update idx fn array =
+        when get idx array is
+            Nothing ->
+                array
+
+            Just val ->
+                set idx (fn val) array
+
+
+    {-| Insert a new value into the array at the given index. The value already at the
+    given index, as well as all subsequent values, will be moved one space to the right.
+
+    Passing a negative index means you want to replace an element counting backwards from the end of the array.
+
+    If the provided index is out of bounds, the element will be added at the beginning (negative index) or at the
+    end (positive index).
+
+        insert 1 0 [ 1, 2, 3 ] == [ 1, 0, 2, 3 ]
+
+    -}
+    insert : Int -> a -> Array a -> Array a
+    insert index value array =
+        Gren.Kernel.Array.splice1 index 0 value array
+
+
+    {-| This function works just like [insert](#insert) but allows you to insert multiple
+    values at once.
+
+        insertMany 1 [ 0, 0 ] [ 1, 2, 3 ] == [ 1, 0, 0, 2, 3 ]
+
+    -}
+    insertMany : Int -> Array a -> Array a -> Array a
+    insertMany index values array =
+        splice index 0 values array
+
+
+    {-| Remove an element from an array.
+
+    Passing a negative index means you want to replace an element counting backwards from the end of the array.
+
+    If the index is out of bounds, no element will be removed.
+
+        remove 1 [ 1, 2, 3 ] == [ 1, 3 ]
+
+    -}
+    remove : Int -> Array a -> Array a
+    remove index array =
+        removeMany index 1 array
+
+
+    {-| This function works just like [remove](#remove), except it allows you to remove multiple elements at once.
+
+    The first argument is the index from where to remove elements from, the second argument is the number of elements
+    to remove.
+
+        remove 0 2 [ 1, 2, 3 ] == [ 3 ]
+
+    -}
+    removeMany : Int -> Int -> Array a -> Array a
+    removeMany =
+        Gren.Kernel.Array.splice0
+
+
+    {-| Add a value to the start of the array.
+
+        pushFirst 1 []          == [ 1 ]
+        pushFirst 5 [ 1, 4, 9 ] == [ 5, 1, 4, 9 ]
+
+    -}
+    pushFirst : a -> Array a -> Array a
+    pushFirst value array =
+        Gren.Kernel.Array.splice1 0 0 value array
+
+
+    {-| Add a value to the end of the array.
+
+        pushLast 1 []          == [ 1 ]
+        pushLast 5 [ 1, 4, 9 ] == [ 1, 4, 9, 5 ]
+
+    -}
+    pushLast : a -> Array a -> Array a
+    pushLast value array =
+        Gren.Kernel.Array.splice1 (length array) 0 value array
+
+
+    {-| Allows you to perform multiple modifications in a single operation. Splice takes an index
+    as its first argument. This marks the point where modifications will be performed. The
+    second argument is the number of elements to remove. The third argument is the elements that
+    will be inserted. The argument order represents the order of modifications. Elements will be
+    removed before new elements are inserted.
+
+    Passing a negative index means you want to replace an element counting backwards from the end of the array.
+
+    If the index is out of bounds no elements will be removed, but elements will be added at the
+    beginning (negative index) or at the end (positive index).
+
+
+        splice 2 0 [ 0 ] [ 1, 2, 3 ] == [ 1, 2, 0, 3 ]
+        splice 2 1 [ 0 ] [ 1, 2, 3 ] == [ 1, 2, 0 ]
+        splice 2 1 [] [ 1, 2, 3 ] == [ 1, 2 ]
+
+    -}
+    splice : Int -> Int -> Array a -> Array a -> Array a
+    splice =
+        Gren.Kernel.Array.spliceN
+
+
+    -- COMBINE
+
+
+    {-| Combine two arrays so that the first array becomes the prefix,
+    and the second array becomes the postfix of the resulting array.
+
+        prepend [ 1, 2, 3 ] [ 4, 5, 6 ] == [ 1, 2, 3, 4, 5, 6 ] 
+
+    You can also use the `++` operator for this purpose.
+
+        [ 1, 2, 3 ] ++ [ 4, 5, 6 ] == [ 1, 2, 3, 4, 5, 6 ]
+    -}
+    prepend : Array a -> Array a -> Array a
+    prepend =
+        Gren.Kernel.Array.append
+
+
+    {-| Combine two arrays so that the first array becomes the postfix,
+    and the second array becomes the prefix of the resulting array.
+
+        append [ 1, 2, 3 ] [ 4, 5, 6 ] == [ 4, 5, 6, 1, 2, 3 ]
+        
+    -}
+    append : Array a -> Array a -> Array a
+    append fst second =
+        prepend second fst
+
+
+    {-| Combine a bunch of arrays into a single array.
+
+        flatten [ [ 1 ], [ 2 ], [ 4, 5 ] ] == [ 1, 2, 4, 5 ]
+
+    -}
+    flatten : Array (Array a) -> Array a
+    flatten =
+        Gren.Kernel.Array.flat
+
+
+    {-| Map a given function onto an array, then flatten the resulting array.
+
+        mapAndFlatten f xs == flatten (map f xs)
+
+    -}
+    mapAndFlatten : (a -> Array b) -> Array a -> Array b
+    mapAndFlatten =
+        Gren.Kernel.Array.flatMap
+
+
+    {-| Places the given value between all members of the given array.
+
+        intersperse "on" [ "turtles", "turtles", "turtles"] == [ "turtles", "on", "turtles", "on", "turtles"]
+
+    -}
+    intersperse : a -> Array a -> Array a
+    intersperse sep xs =
+        when popFirst xs is
+            Nothing ->
+                []
+
+            Just { first = head, rest = tail } ->
+                pushFirst head <| mapAndFlatten (\\val -> [ sep, val ]) tail
+
+
+    {-| Combine two arrays, combining them with the given function.
+    If one array is longer, the extra elements are dropped.
+
+        map2 (\\x y -> { x = x, y = y }) [ 1 ] [ 2 ] == [ { x = 1, y = 2 } ]
+    -}
+    map2 : (a -> b -> result) -> Array a -> Array b -> Array result
+    map2 =
+        Gren.Kernel.Array.map2
+
+
+    {-| Combine three arrays, combining them with the given function.
+    If one array is longer, the extra elements are dropped.
+
+        map3 (\\x y z -> { x = x, y = y, z = z }) [ 1 ] [ 2 ] [ 3 ] == [ { x = 1, y = 2, z = 3 } ]
+    -}
+    map3 : (a -> b -> c -> result) -> Array a -> Array b -> Array c -> Array result
+    map3 =
+        Gren.Kernel.Array.map3
+
+
+    -- DECONSTRUCT
+
+
+    {-| Retrieve the first element of the array, if it exists.
+
+        first [ 1, 2, 3 ] == Just 1
+
+    -}
+    first : Array a -> Maybe a
+    first array =
+        get 0 array
+
+
+    {-| Retrieve the last element of the array, if it exists.
+
+        last [ 1, 2, 3 ] == Just 3
+
+    -}
+    last : Array a -> Maybe a
+    last array =
+        get -1 array
+
+
+    {-| Get a sub section of an array: `(slice start end array)`.
+
+    The `start` is a zero-based index where we will start our slice.
+    The `end` is a zero-based index that indicates the end of the slice.
+    The slice extracts up to, but no including, the `end`.
+
+    Both `start` and `end` can be negative, indicating an offset from the end
+    of the array. Removing the last element of the array can be expressed as:
+
+        `slice 0 -1 arr`.
+
+    In the case of an impossible slice, the empty array is returned.
+
+    -}
+    slice : Int -> Int -> Array a -> Array a
+    slice =
+        Gren.Kernel.Array.slice
+
+
+    {-| Remove the first `n` elements of the array.
+
+        dropFirst 5 [ 1 ] == []
+        dropFirst 1 [ 1, 2, 3 ] == [ 2, 3 ]
+
+    -}
+    dropFirst : Int -> Array a -> Array a
+    dropFirst n array =
+        slice n (length array) array
+
+
+    {-| Remove the last `n` elements of the array.
+
+        dropLast 1 [ 1, 2, 3 ] == [ 1, 2 ]
+
+    -}
+    dropLast : Int -> Array a -> Array a
+    dropLast n array =
+        slice 0 (length array - n) array
+
+
+    {-| Take the first `n` elements from the array.
+
+        takeFirst 2 [ 1, 2, 3 ] == [ 1, 2 ]
+
+    -}
+    takeFirst : Int -> Array a -> Array a
+    takeFirst n array =
+        slice 0 n array
+
+
+    {-| Take the last `n` elements from the array.
+
+        takeLast 2 [ 1, 2, 3 ] == [ 2, 3 ]
+
+    -}
+    takeLast : Int -> Array a -> Array a
+    takeLast n array =
+        let
+            len =
+                length array
+        in
+        slice (len - n) len array
+
+
+    {-| Split an array into its first element, and its remaining elements, if possible.
+
+        popFirst [ 1, 2, 3 ] == Just { first = 1, rest = [ 2, 3 ] }
+
+    -}
+    popFirst : Array a -> Maybe { first : a, rest : Array a }
+    popFirst array =
+        when first array is
+            Just value ->
+                Just
+                    { first = value
+                    , rest = dropFirst 1 array
+                    }
+
+            Nothing ->
+                Nothing
+
+
+    {-| Split an array into its last element, and its remaining elements, if possible.
+
+        popFirst [ 1, 2, 3 ] == Just { last = 3, initial = [ 1, 2 ] }
+
+    -}
+    popLast : Array a -> Maybe { last : a, initial : Array a }
+    popLast array =
+        when last array is
+            Just value ->
+                Just
+                    { last = value
+                    , initial = dropLast 1 array
+                    }
+
+            Nothing ->
+                Nothing
+
+
+    {-| Divide elements into two arrays based on the result of a boolean test.
+
+        partition (\\x -> x < 3) [ 0, 1, 2, 3, 4, 5 ] == { trues = [ 0, 1, 2 ], falses = [ 3, 4, 5 ] }
+
+    -}
+    partition : (a -> Bool) -> Array a -> { trues : Array a, falses : Array a }
+    partition fn array =
+        foldl
+            (\\val { trues, falses } ->
+                if fn val then
+                    { trues = pushLast val trues
+                    , falses = falses
+                    }
+
+                else
+                    { trues = trues
+                    , falses = pushLast val falses
+                    }
+            )
+            { trues = [], falses = [] }
+            array
+
+
+    -- SORT
+
+
+    {-| Sort values from lowest to highest
+
+        sort [ 3, 1, 5 ] == [ 1, 3, 5 ]
+
+    -}
+    sort : Array comparable -> Array comparable
+    sort =
+        Gren.Kernel.Array.sort
+
+
+    {-| Sort values by a derived property.
+
+        sortBy String.length [ "mouse", "cat" ] == [ "cat", "mouse" ]
+
+    -}
+    sortBy : (a -> comparable) -> Array a -> Array a
+    sortBy =
+        Gren.Kernel.Array.sortBy
+
+
+    {-| Sort values with a custom comparison function.
+
+        sortWith flippedComparison [1,2,3,4,5] == [5,4,3,2,1]
+
+        flippedComparison a b =
+            when compare a b is
+            LT -> GT
+            EQ -> EQ
+            GT -> LT
+
+    This is also the most general sort function, allowing you to define any other: `sort == sortWith compare`
+
+    -}
+    sortWith : (a -> a -> Order) -> Array a -> Array a
+    sortWith =
+        Gren.Kernel.Array.sortWith
+    """
+
+maybeSource =
+    """
+    module Maybe exposing
+        ( Maybe(..)
+        , hasValue, checkValue, keepIf
+        , withDefault, withDefaultLazy, map, map2, map3, andMap
+        , andThen
+        )
+
+    {-| This library fills a bunch of important niches in Gren. A `Maybe` can help
+    you with optional arguments, error handling, and records with optional fields.
+
+    @docs Maybe
+
+
+    ## Queries
+
+    @docs hasValue, checkValue, keepIf
+
+
+    ## Transform
+
+    @docs withDefault, withDefaultLazy, map, map2, map3, andMap, andThen
+
+    -}
+
+    import Basics exposing (..)
+
+
+    {-| Represent values that may or may not exist. It can be useful if you have a
+    record field that is only filled in sometimes. Or if a function takes a value
+    sometimes, but does not absolutely need it.
+
+        -- A person, but maybe we do not know their age.
+        type alias Person =
+            { name : String
+            , age : Maybe Int
+            }
+
+        tom =
+            { name = "Tom", age = Just 42 }
+
+        sue =
+            { name = "Sue", age = Nothing }
+
+    -}
+    type Maybe a
+        = Just a
+        | Nothing
+
+
+    {-| Checks to see if the [Maybe](#Maybe) is `Just`, and that the contained value
+    equals a provided constant.
+
+        hasValue 5 (Just 5) == True
+
+        hasValue 5 (Just 3) == False
+
+        hasValue 5 Nothing == False
+
+    -}
+    hasValue : a -> Maybe a -> Bool
+    hasValue value maybe =
+        when maybe is
+            Just contained ->
+                contained == value
+
+            Nothing ->
+                False
+
+
+    {-| Checks to see if the [Maybe](#Maybe) is `Just`, and that the contained value
+    passes the provided test.
+
+        checkValue isOdd (Just 5) == True
+
+        checkValue isOdd (Just 2) == False
+
+        checkValue isOdd Nothing == False
+
+    -}
+    checkValue : (a -> Bool) -> Maybe a -> Bool
+    checkValue test maybe =
+        when maybe is
+            Just contained ->
+                test contained
+
+            Nothing ->
+                False
+
+
+    {-| Provide a default value, turning an optional value into a normal
+    value. This comes in handy when paired with functions like
+    [`Dict.get`](Dict#get) which gives back a `Maybe`.
+
+        withDefault 100 (Just 42) == 42
+        
+        withDefault 100 Nothing == 100
+        
+        withDefault "unknown" (Dict.get "Tom" Dict.empty) == "unknown"
+
+    -}
+    withDefault : a -> Maybe a -> a
+    withDefault default maybe =
+        when maybe is
+            Just value ->
+                value
+
+            Nothing ->
+                default
+
+
+    {-| Same as [withDefault](#withDefault) but the default value is wrapped in
+    a function. This is useful when computing the default value is expensive, as
+    you can compute it only when it is required.
+
+    In most cases you should use pattern matching or [withDefault](#withDefault) instead.
+
+    -}
+    withDefaultLazy : ({} -> a) -> Maybe a -> a
+    withDefaultLazy default maybe =
+        when maybe is
+            Just value ->
+                value
+
+            Nothing ->
+                default {}
+
+
+    {-| Transform a `Maybe` value with a given function:
+
+        map sqrt (Just 9) == Just 3
+
+        map sqrt Nothing == Nothing
+
+        map sqrt (String.toFloat "9") == Just 3
+
+        map sqrt (String.toFloat "x") == Nothing
+
+    -}
+    map : (a -> b) -> Maybe a -> Maybe b
+    map f maybe =
+        when maybe is
+            Just value ->
+                Just (f value)
+
+            Nothing ->
+                Nothing
+
+
+    {-| Apply a function if both arguments are `Just` a value.
+
+        map2 (+) (Just 3) (Just 4) == Just 7
+
+        map2 (+) (Just 3) Nothing == Nothing
+
+        map2 (+) Nothing (Just 4) == Nothing
+
+        map2 (+) (String.toInt "1") (String.toInt "123") == Just 124
+
+        map2 (+) (String.toInt "x") (String.toInt "123") == Nothing
+
+        map2 (+) (String.toInt "1") (String.toInt "1.3") == Nothing
+
+    -}
+    map2 : (a -> b -> value) -> Maybe a -> Maybe b -> Maybe value
+    map2 func ma mb =
+        when ma is
+            Nothing ->
+                Nothing
+
+            Just a ->
+                when mb is
+                    Nothing ->
+                        Nothing
+
+                    Just b ->
+                        Just (func a b)
+
+
+    {-| Apply a function if all three arguments are `Just` a value.
+
+        map3 (+) (Just 3) (Just 4) (Just 3) == Just 10
+
+        map3 (+) (Just 3) Nothing (Just 3) == Nothing
+
+        map3 (+) Nothing (Just 4) (Just 3) == Nothing
+
+        map3 (+) (String.toInt "1") (String.toInt "123") (String.toInt "4") == Just 128
+
+        map3 (+) (String.toInt "x") (String.toInt "123") (String.toInt "4") == Nothing
+
+    -}
+    map3 : (a -> b -> c -> value) -> Maybe a -> Maybe b -> Maybe c -> Maybe value
+    map3 func ma mb mc =
+        when ma is
+            Nothing ->
+                Nothing
+
+            Just a ->
+                when mb is
+                    Nothing ->
+                        Nothing
+
+                    Just b ->
+                        when mc is
+                            Nothing ->
+                                Nothing
+
+                            Just c ->
+                                Just (func a b c)
+
+
+    {-| Combine multiple `Maybe`s. Helpful when [map2](#map2) and [map3](#map3) aren't enough.
+
+        Just (\\a b c -> a ++ b ++ c)
+            |> andMap (Just "one ")
+            |> andMap (Just "more ")
+            |> andMap (Just "time")
+            == (Just "one more time")
+    -}
+    andMap : Maybe a -> Maybe (a -> b) -> Maybe b
+    andMap =
+        map2 (|>)
+
+
+    {-| Returns `Nothing` if the contained value doesn't pass the given
+    test.
+
+        keepIf isOdd (Just 5) == Just 5
+
+        keepIf isOdd (Just 2) == Nothing
+
+    -}
+    keepIf : (a -> Bool) -> Maybe a -> Maybe a
+    keepIf test maybe =
+        when maybe is
+            Just contained ->
+                if test contained then
+                    maybe
+
+                else
+                    Nothing
+
+            Nothing ->
+                Nothing
+
+
+    {-| Chain together many computations that may fail. It is helpful to see its
+    definition:
+
+        andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+        andThen callback maybe =
+            when maybe is
+                Just value ->
+                    callback value
+
+                Nothing ->
+                    Nothing
+
+    This means we only continue with the callback if things are going well. For
+    example, say you need to parse some user input as a month:
+
+        parseMonth : String -> Maybe Int
+        parseMonth userInput =
+            String.toInt userInput
+                |> andThen toValidMonth
+
+        toValidMonth : Int -> Maybe Int
+        toValidMonth month =
+            if 1 <= month && month <= 12 then
+                Just month
+
+            else
+                Nothing
+
+    In the `parseMonth` function, if `String.toInt` produces `Nothing` (because
+    the `userInput` was not an integer) this entire chain of operations will
+    short-circuit and result in `Nothing`. If `toValidMonth` results in `Nothing`,
+    again the chain of computations will result in `Nothing`.
+
+    -}
+    andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+    andThen callback maybeValue =
+        when maybeValue is
+            Just value ->
+                callback value
+
+            Nothing ->
+                Nothing
+
+
+
+    -- FOR INTERNAL USE ONLY
+    --
+    -- Use `when` expressions for this in Gren code!
+
+
+    isJust : Maybe a -> Bool
+    isJust maybe =
+        when maybe is
+            Just _ ->
+                True
+
+            Nothing ->
+                False
+
+
+    destruct : b -> (a -> b) -> Maybe a -> b
+    destruct default func maybe =
+        when maybe is
+            Just a ->
+                func a
+
+            Nothing ->
+                default
+    """
+
+resultSource =
+    """
+    module Result exposing
+        ( Result(..)
+        , hasValue, checkValue, firstOk, allOk
+        , map, map2, map3, andMap
+        , andThen, onError
+        , withDefault, withDefaultLazy, toMaybe, fromMaybe, mapError
+        )
+
+    {-| A `Result` is the result of a computation that may fail. This is a great
+    way to manage errors in Gren.
+
+    @docs Result
+
+
+    ## Query
+
+    @docs hasValue, checkValue, firstOk, allOk
+
+
+    ## Mapping
+
+    @docs map, map2, map3, andMap
+
+
+    ## Chaining
+
+    @docs andThen, onError
+
+
+    ## Handling Errors
+
+    @docs withDefault, withDefaultLazy, toMaybe, fromMaybe, mapError
+
+    -}
+
+    import Basics exposing (..)
+    import Maybe exposing (Maybe(..))
+    import Array exposing (Array)
+
+
+    {-| A `Result` is either `Ok` meaning the computation succeeded, or it is an
+    `Err` meaning that there was some failure.
+    -}
+    type Result error value
+        = Ok value
+        | Err error
+
+
+    {-| If the result is `Ok` check if the contained value matches the provided value.
+
+        Result.hasValue 123 (Ok 123) == True
+
+        Result.hasValue 123 (Ok 5) == False
+        
+        Result.hasValue 123 (Err "failed") == False
+
+    -}
+    hasValue : a -> Result x a -> Bool
+    hasValue value result =
+        when result is
+            Ok a ->
+                a == value
+
+            Err _ ->
+                False
+
+
+    {-| If the result is `Ok` check if the contained value passes the provided test.
+
+        Result.checkValue isOdd (Ok 5) == True
+
+        Result.checkValue isOdd (Ok 12) == False
+        
+        Result.checkValue isOdd (Err "failed") == False
+
+    -}
+    checkValue : (a -> Bool) -> Result x a -> Bool
+    checkValue test result =
+        when result is
+            Ok a ->
+                test a 
+
+            Err _ ->
+                False
+
+
+    {-| Returns the first `Ok` value in an `Array` of `Result`s.
+
+        Result.firstOk [ Ok 5, Err 0, Ok 10 ] == Just 5
+
+        Result.firstOk [ Err 0, Err 1 ] == Nothing
+
+    -}
+    firstOk : Array (Result x a) -> Maybe a
+    firstOk array =
+        Array.findFirst isOk array
+            |> Maybe.map .value
+            |> Maybe.andThen toMaybe
+
+
+    {-| Convert an `Array` of `Result err ok` to `Result (Array err) (Array ok)`. You'll only
+    receive an `Ok` if there are no `Err` values in the `Array`.
+
+        Result.allOk [ Ok 5, Err 0, Ok 10 ] == Err [ 0 ]
+
+        Result.allOk [ Ok 0, Ok 1 ] == Ok [ 0, 1 ]
+
+    -}
+    allOk : Array (Result err ok) -> Result (Array err) (Array ok)
+    allOk array =
+        let
+            errors =
+                Array.mapAndKeepJust errToMaybe array
+        in
+        if Array.length errors > 0 then
+            Err errors
+
+        else
+            Ok <| Array.mapAndKeepJust toMaybe array
+
+
+    errToMaybe : Result err ok -> Maybe err
+    errToMaybe result =
+        when result is
+            Ok _ ->
+                Nothing
+
+            Err err ->
+                Just err
+
+
+    {-| If the result is `Ok` return the value, but if the result is an `Err` then
+    return a given default value. The following examples try to parse integers.
+
+        Result.withDefault 0 (Ok 123) == 123
+
+        Result.withDefault 0 (Err "no") == 0
+
+    -}
+    withDefault : a -> Result x a -> a
+    withDefault def result =
+        when result is
+            Ok a ->
+                a
+
+            Err _ ->
+                def
+
+
+    {-| Same as [withDefault](#withDefault) but the default value is provided by a function.
+    This lets you avoid computing the default value if it isn't necessary.
+
+    -}
+    withDefaultLazy : ({} -> a) -> Result x a -> a
+    withDefaultLazy provider result =
+        when result is
+            Ok a ->
+                a
+
+            Err _ ->
+                provider {}
+
+
+    {-| Apply a function to a result. If the result is `Ok`, it will be converted.
+    If the result is an `Err`, the same error value will propagate through.
+
+        map sqrt (Ok 4.0) == Ok 2.0
+
+        map sqrt (Err "bad input") == Err "bad input"
+
+    -}
+    map : (a -> value) -> Result x a -> Result x value
+    map func ra =
+        when ra is
+            Ok a ->
+                Ok (func a)
+
+            Err e ->
+                Err e
+
+
+    {-| Apply a function if both results are `Ok`. If not, the first `Err` will
+    propagate through.
+
+        map2 max (Ok 42) (Ok 13) == Ok 42
+
+        map2 max (Err "x") (Ok 13) == Err "x"
+
+        map2 max (Ok 42) (Err "y") == Err "y"
+
+        map2 max (Err "x") (Err "y") == Err "x"
+
+    This can be useful if you have two computations that may fail, and you want
+    to put them together quickly.
+
+    -}
+    map2 : (a -> b -> value) -> Result x a -> Result x b -> Result x value
+    map2 func ra rb =
+        when ra is
+            Err x ->
+                Err x
+
+            Ok a ->
+                when rb is
+                    Err x ->
+                        Err x
+
+                    Ok b ->
+                        Ok (func a b)
+
+
+    {-| Apply a function if three results are `Ok`. If not, the first `Err` will
+    propagate through.
+
+        map3 (+) (Ok 1) (Ok 3) (Ok 5) == Ok 9
+
+        map3 (+) (Err "x") (Ok 3) (Ok 5) == Err "x"
+
+        map3 (+) (Ok 1) (Err "y") (Ok 5) == Err "y"
+
+    This can be useful if you have three computations that may fail, and you want
+    to put them together quickly.
+    -}
+    map3 : (a -> b -> c -> value) -> Result x a -> Result x b -> Result x c -> Result x value
+    map3 func ra rb rc =
+        when ra is
+            Err x ->
+                Err x
+
+            Ok a ->
+                when rb is
+                    Err x ->
+                        Err x
+
+                    Ok b ->
+                        when rc is
+                            Err x ->
+                                Err x
+
+                            Ok c ->
+                                Ok (func a b c)
+
+
+    {-| This function lets you map over multiple values. Useful when [map2](#map2) and [map3](#map3)
+    aren't enough.
+
+        Ok (\\one two three four -> one + two + three + four)
+            |> andMap (Ok 1)
+            |> andMap (Ok 2)
+            |> andMap (Ok 3)
+            |> andMap (Ok 4)
+            == Ok 10
+    -}
+    andMap : Result x a -> Result x (a -> b) -> Result x b
+    andMap =
+        map2 (|>)
+
+
+    {-| Chain together a sequence of computations that may fail. It is helpful
+    to see its definition:
+
+        andThen : (a -> Result e b) -> Result e a -> Result e b
+        andThen callback result =
+            when result is
+                Ok value ->
+                    callback value
+
+                Err msg ->
+                    Err msg
+
+    This means we only continue with the callback if things are going well. For
+    example, say you need to use (`toInt : String -> Result String Int`) to parse
+    a month and make sure it is between 1 and 12:
+
+
+        toValidMonth : Int -> Result String Int
+        toValidMonth month =
+            if month >= 1 && month <= 12 then
+                Ok month
+
+            else
+                Err "months must be between 1 and 12"
+
+        toMonth : String -> Result String Int
+        toMonth rawString =
+            toInt rawString
+                |> andThen toValidMonth
+
+        -- toMonth "4" == Ok 4
+        -- toMonth "9" == Ok 9
+        -- toMonth "a" == Err "cannot parse to an Int"
+        -- toMonth "0" == Err "months must be between 1 and 12"
+
+    This allows us to come out of a chain of operations with quite a specific error
+    message. It is often best to create a custom type that explicitly represents
+    the exact ways your computation may fail. This way it is easy to handle in your
+    code.
+
+    -}
+    andThen : (a -> Result x b) -> Result x a -> Result x b
+    andThen callback result =
+        when result is
+            Ok value ->
+                callback value
+
+            Err msg ->
+                Err msg
+
+
+    {-| This is similar to [andThen](#andThen) but the callback is triggered when
+    the `Result` is an `Err` value. This gives you the option of dealing with errors
+    in a chain.
+
+        toInt "a"
+            |> onError (\\_msg -> Ok 1) -- defaulting to first month of the year
+            |> andThen toValidMonth
+
+    -}
+    onError : (a -> Result b x) -> Result a x -> Result b x
+    onError callback result =
+        when result is
+            Ok value ->
+                Ok value
+
+            Err err ->
+                callback err
+
+
+    {-| Transform an `Err` value. For example, say the errors we get have too much
+    information:
+
+        parseInt : String -> Result ParseError Int
+
+        type alias ParseError =
+            { message : String
+            , code : Int
+            , position : (Int,Int)
+            }
+
+        mapError .message (parseInt "123") == Ok 123
+        mapError .message (parseInt "abc") == Err "char 'a' is not a number"
+
+    -}
+    mapError : (x -> y) -> Result x a -> Result y a
+    mapError f result =
+        when result is
+            Ok v ->
+                Ok v
+
+            Err e ->
+                Err (f e)
+
+
+    {-| Convert to a simpler `Maybe` if the actual error message is not needed or
+    you need to interact with some code that primarily uses maybes.
+
+        parseInt : String -> Result ParseError Int
+
+        maybeParseInt : String -> Maybe Int
+        maybeParseInt string =
+            toMaybe (parseInt string)
+
+    -}
+    toMaybe : Result x a -> Maybe a
+    toMaybe result =
+        when result is
+            Ok v ->
+                Just v
+
+            Err _ ->
+                Nothing
+
+
+    {-| Convert from a simple `Maybe` to interact with some code that primarily
+    uses `Results`.
+
+        parseInt : String -> Maybe Int
+
+        resultParseInt : String -> Result String Int
+        resultParseInt string =
+            fromMaybe ("error parsing string: " ++ toString string) (parseInt string)
+
+    -}
+    fromMaybe : x -> Maybe a -> Result x a
+    fromMaybe err maybe =
+        when maybe is
+            Just v ->
+                Ok v
+
+            Nothing ->
+                Err err
+
+
+
+    -- FOR INTERNAL USE ONLY
+    --
+    -- Use `when` expressions for this in Gren code!
+
+
+    isOk : Result x a -> Bool
+    isOk result =
+        when result is
+            Ok _ ->
+                True
+
+            Err _ ->
+                False
+    """
+
+charSource =
+    """
+    module Char exposing
+        ( Char
+        , isUpper, isLower, isAlpha, isAlphaNum
+        , isDigit, isOctDigit, isHexDigit
+        , toCode, fromCode
+        )
+
+    {-| Functions for working with characters. Character literals are enclosed in
+    `'a'` pair of single quotes.
+
+
+    @docs Char
+
+
+    ## ASCII Letters
+
+    @docs isUpper, isLower, isAlpha, isAlphaNum
+
+
+    ## Digits
+
+    @docs isDigit, isOctDigit, isHexDigit
+
+
+    ## Unicode Code Points
+
+    @docs toCode, fromCode
+
+    -}
+
+    import Basics exposing ((&&), (<=), (>=), (||), Bool, Int)
+    import Gren.Kernel.Char
+
+
+
+    -- CHAR
+
+
+    {-| A `Char` is a single [unicode][u] character:
+
+        'a'
+
+        '0'
+
+        'Z'
+
+        '?'
+
+        '"'
+
+        'Σ'
+
+        '🙈'
+
+        '\\t'
+
+        '"'
+
+        '\\''
+
+        '🙈' -- '🙈'
+
+    **Note 1:** You _cannot_ use single quotes around multiple characters like in
+    JavaScript. This is how we distinguish [`String`](String#String) and `Char`
+    values in syntax.
+
+    **Note 2:** You can use the unicode escapes from `\\u{0000}` to `\\u{10FFFF}` to
+    represent characters by their code point. You can also include the unicode
+    characters directly. Using the escapes can be better if you need one of the
+    many whitespace characters with different widths.
+
+    [u]: https://en.wikipedia.org/wiki/Unicode
+
+    -}
+    type Char
+        = Char -- NOTE: The compiler provides the real implementation.
+
+
+
+    -- CLASSIFICATION
+
+
+    {-| Detect upper case ASCII characters.
+
+        isUpper 'A' == True
+
+        isUpper 'B'
+            == True
+            ... isUpper 'Z'
+            == True
+
+        isUpper '0' == False
+
+        isUpper 'a' == False
+
+        isUpper '-' == False
+
+        isUpper 'Σ' == False
+
+    -}
+    isUpper : Char -> Bool
+    isUpper char =
+        let
+            code =
+                toCode char
+        in
+        code <= 0x5A && 0x41 <= code
+
+
+    {-| Detect lower case ASCII characters.
+
+        isLower 'a' == True
+
+        isLower 'b'
+            == True
+            ... isLower 'z'
+            == True
+
+        isLower '0' == False
+
+        isLower 'A' == False
+
+        isLower '-' == False
+
+        isLower 'π' == False
+
+    -}
+    isLower : Char -> Bool
+    isLower char =
+        let
+            code =
+                toCode char
+        in
+        0x61 <= code && code <= 0x7A
+
+
+    {-| Detect upper case and lower case ASCII characters.
+
+        isAlpha 'a' == True
+
+        isAlpha 'b' == True
+
+        isAlpha 'E' == True
+
+        isAlpha 'Y' == True
+
+        isAlpha '0' == False
+
+        isAlpha '-' == False
+
+        isAlpha 'π' == False
+
+    -}
+    isAlpha : Char -> Bool
+    isAlpha char =
+        isLower char || isUpper char
+
+
+    {-| Detect upper case and lower case ASCII characters.
+
+        isAlphaNum 'a' == True
+
+        isAlphaNum 'b' == True
+
+        isAlphaNum 'E' == True
+
+        isAlphaNum 'Y' == True
+
+        isAlphaNum '0' == True
+
+        isAlphaNum '7' == True
+
+        isAlphaNum '-' == False
+
+        isAlphaNum 'π' == False
+
+    -}
+    isAlphaNum : Char -> Bool
+    isAlphaNum char =
+        isLower char || isUpper char || isDigit char
+
+
+    {-| Detect digits `0123456789`
+
+        isDigit '0' == True
+
+        isDigit '1'
+            == True
+            ... isDigit '9'
+            == True
+
+        isDigit 'a' == False
+
+        isDigit 'b' == False
+
+        isDigit 'A' == False
+
+    -}
+    isDigit : Char -> Bool
+    isDigit char =
+        let
+            code =
+                toCode char
+        in
+        code <= 0x39 && 0x30 <= code
+
+
+    {-| Detect octal digits `01234567`
+
+        isOctDigit '0' == True
+
+        isOctDigit '1'
+            == True
+            ... isOctDigit '7'
+            == True
+
+        isOctDigit '8' == False
+
+        isOctDigit 'a' == False
+
+        isOctDigit 'A' == False
+
+    -}
+    isOctDigit : Char -> Bool
+    isOctDigit char =
+        let
+            code =
+                toCode char
+        in
+        code <= 0x37 && 0x30 <= code
+
+
+    {-| Detect hexadecimal digits `0123456789abcdefABCDEF`
+    -}
+    isHexDigit : Char -> Bool
+    isHexDigit char =
+        let
+            code =
+                toCode char
+        in
+        (0x30 <= code && code <= 0x39)
+            || (0x41 <= code && code <= 0x46)
+            || (0x61 <= code && code <= 0x66)
+
+
+
+    -- CONVERSIONS
+
+
+    {-| Convert to the corresponding Unicode [code point][cp].
+
+    [cp]: https://en.wikipedia.org/wiki/Code_point
+
+        toCode 'A' == 65
+
+        toCode 'B' == 66
+
+        toCode '木' == 0x6728
+
+        toCode '𝌆' == 0x0001D306
+
+        toCode '😃' == 0x0001F603
+
+    -}
+    toCode : Char -> Int
+    toCode =
+        Gren.Kernel.Char.toCode
+
+
+    {-| Convert a Unicode [code point][cp] to a character.
+
+        fromCode 65 == 'A'
+
+        fromCode 66 == 'B'
+
+        fromCode 0x6728 == '木'
+
+        fromCode 0x0001D306 == '𝌆'
+
+        fromCode 0x0001F603 == '😃'
+
+        fromCode -1 == '�'
+
+    The full range of unicode is from `0` to `0x10FFFF`. With numbers outside that
+    range, you get [the replacement character][fffd].
+
+    [cp]: https://en.wikipedia.org/wiki/Code_point
+    [fffd]: https://en.wikipedia.org/wiki/Specials_(Unicode_block)#Replacement_character
+
+    -}
+    fromCode : Int -> Char
+    fromCode =
+        Gren.Kernel.Char.fromCode
+    """
+
+stringSource =
+    """
+    module String exposing
+        ( String, isEmpty, count, reverse, repeat, replace
+        , prepend, append, split, join, words, lines
+        , slice, takeFirst, takeLast, dropFirst, dropLast
+        , contains, startsWith, endsWith, firstIndexOf, lastIndexOf, indices
+        , toInt, fromInt
+        , toFloat, fromFloat
+        , fromChar, pushFirst, pushLast, popFirst, popLast
+        , toArray, fromArray
+        , toUpper, toLower, pad, padLeft, padRight, trim, trimLeft, trimRight
+        , map, keepIf, foldl, foldr, any, all
+        , unitLength, getUnit, foldlUnits, foldrUnits, sliceUnits
+        )
+
+    {-| A built-in representation for efficient string manipulation. When it comes to strings,
+    there are three concepts worth knowing about:
+
+    * Code units: represents the smallest primitive value of a string. In Gren,
+    code units are represented by a 16-bit value. This is enough to store the most common
+    characters in western languages (Latin, Greek, Cyrilic), but not all unicode characters.
+    * Code points: represents a unicode character. Code points can be represented by one
+    unit, or a pair of units.
+    * Graphemes: represents a single visual glyph, like certain emojis or characters with
+    accents.
+
+    Unless otherwise noted, all functions in this module deal with code points.
+
+
+    @docs String, isEmpty, count, reverse, repeat, replace
+
+
+    ## Building and Splitting
+
+    @docs prepend, append, split, join, words, lines
+
+
+    ## Get Substrings
+
+    @docs slice, takeFirst, takeLast, dropFirst, dropLast
+
+
+    ## Check for Substrings
+
+    @docs contains, startsWith, endsWith, firstIndexOf, lastIndexOf, indices
+
+
+    ## Int Conversions
+
+    @docs toInt, fromInt
+
+
+    ## Float Conversions
+
+    @docs toFloat, fromFloat
+
+
+    ## Char Conversions
+
+    @docs fromChar, pushFirst, pushLast, popFirst, popLast
+
+
+    ## Array Conversions
+
+    @docs toArray, fromArray
+
+
+    ## Formatting
+
+    Cosmetic operations such as padding with extra characters or trimming whitespace.
+
+    @docs toUpper, toLower, pad, padLeft, padRight, trim, trimLeft, trimRight
+
+    ## Higher-Order Functions
+
+    @docs map, keepIf, foldl, foldr, any, all
+
+    ## Char Units
+
+    Functions that operates on units instead of code points.
+
+    @docs unitLength, getUnit, foldlUnits, foldrUnits, sliceUnits
+
+    -}
+
+    import Array exposing (Array)
+    import Basics exposing (..)
+    import Math exposing (floor, ceiling)
+    import Bitwise
+    import Char exposing (Char)
+    import Gren.Kernel.String
+    import Maybe exposing (Maybe)
+    import Result exposing (Result)
+
+
+
+    -- STRINGS
+
+
+    {-| A `String` is a chunk of text. `String` literals are enclosed in `"double quotes"`.
+
+        "Hello!"
+
+        "How are you?"
+
+        "🙈🙉🙊"
+
+        -- strings with escape characters
+        "this\\n\\t\\"that\\""
+
+        "🙈🙉🙊" -- "🙈🙉🙊"
+
+        -- multiline strings
+        \"\"\"Triple double quotes let you
+        create "multiline strings" which
+        can have unescaped quotes and newlines.
+        \"\"\"
+
+    A `String` can represent any sequence of [unicode characters][u]. You can use
+    the unicode escapes from `\\u{0000}` to `\\u{10FFFF}` to represent characters
+    by their code point. You can also include the unicode characters directly.
+    Using the escapes can be better if you need one of the many whitespace
+    characters with different widths.
+
+    [u]: https://en.wikipedia.org/wiki/Unicode
+
+    **Note:** JavaScript lets you use double quotes and single quotes interchangably.
+    This is not true in Gren. You must use double quotes for a `String`, and you must
+    use single quotes for a [`Char`](Char#Char).
+
+    -}
+    type String
+        = String -- NOTE: The compiler provides the real implementation.
+
+
+    {-| Determine if a string is empty.
+
+        isEmpty "" == True
+
+        isEmpty "the world" == False
+
+    -}
+    isEmpty : String -> Bool
+    isEmpty string =
+        string == ""
+
+
+    {-| Count the number of characters in a string.
+
+        count "innumerable" == 11
+
+        count "" == 0
+
+    -}
+    count : String -> Int
+    count string =
+        foldl (\\_ num -> num + 1) 0 string
+
+
+    {-| Reverse a string.
+
+        reverse "stressed" == "desserts"
+
+    -}
+    reverse : String -> String
+    reverse str =
+        toArray str
+            |> Array.reverse
+            |> fromArray
+
+
+    {-| Repeat a string _n_ times.
+
+        repeat 3 "ha" == "hahaha"
+
+    -}
+    repeat : Int -> String -> String
+    repeat =
+        Gren.Kernel.String.repeat
+
+
+    {-| Replace all occurrences of some substring.
+
+        replace "." "-" "Json.Decode.succeed" == "Json-Decode-succeed"
+
+        replace "," "/" "a,b,c,d,e" == "a/b/c/d/e"
+
+    **Note:** If you need more advanced replacements, check out the
+    [`gren-lang/parser`][parser] package or [`String.Regex`][regex] module.
+
+    [parser]: /package/gren-lang/parser
+    [regex]: String.Regex
+
+    -}
+    replace : String -> String -> String -> String
+    replace before after string =
+        join after (split before string)
+
+
+
+    -- BUILDING AND SPLITTING
+
+
+    {-| Combine two strings. You can also use [the `(++)` operator](Basics#++)
+    to do this.
+
+        prepend "butter" "fly" == "butterfly"
+
+    -}
+    prepend : String -> String -> String
+    prepend =
+        Gren.Kernel.String.append
+
+
+    {-| Append one string onto another. This is the same operation as [prepend](prepend),
+    but with the arguments reversed.
+        
+        append "butter" "fly" == "flybutter"
+
+    -}
+    append : String -> String -> String
+    append lhs rhs =
+        prepend rhs lhs
+
+
+    {-| Split a string using a given separator. If the seperator doesn't appear,
+    you will get an array containing the original string.
+
+        split "," "" == [""]
+        
+        split "," "cat" == ["cat"]
+        
+        split "," "cat,dog,cow" == [ "cat", "dog", "cow" ]
+        
+        split "/" "home/evan/Desktop/" == [ "home", "evan", "Desktop", "" ]
+
+    -}
+    split : String -> String -> Array String
+    split =
+        Gren.Kernel.String.split
+
+
+    {-| Put many strings together with a given separator.
+
+        join "a" [ "H", "w", "ii", "n" ] == "Hawaiian"
+
+        join " " [ "cat", "dog", "cow" ] == "cat dog cow"
+
+        join "/" [ "home", "evan", "Desktop" ] == "home/evan/Desktop"
+
+    -}
+    join : String -> Array String -> String
+    join =
+        Gren.Kernel.String.join
+
+
+    {-| Break a string into words, splitting on chunks of whitespace.
+
+        words "How are \\t you? \\n Good?" == [ "How", "are", "you?", "Good?" ]
+
+    -}
+    words : String -> Array String
+    words =
+        Gren.Kernel.String.words
+
+
+    {-| Break a string into lines, splitting on newlines.
+
+        lines "How are you?\\nGood?" == [ "How are you?", "Good?" ]
+
+    -}
+    lines : String -> Array String
+    lines =
+        Gren.Kernel.String.lines
+
+
+
+    -- SUBSTRINGS
+
+
+    {-| Take a substring given a start and end index. Negative indexes
+    are taken starting from the _end_ of the array.
+
+        slice 7 9 "snakes on a plane!" == "on"
+
+        slice 0 6 "snakes on a plane!" == "snakes"
+
+        slice 0 -7 "snakes on a plane!" == "snakes on a"
+
+        slice -6 -1 "snakes on a plane!" == "plane"
+
+    -}
+    slice : Int -> Int -> String -> String
+    slice =
+        Gren.Kernel.String.slice
+
+
+    {-| Make a new string using the first _n_ characters. If _n_ is larger than
+    the length of the string, then the string is returned as is.
+
+        takeFirst 2 "Mulder" == "Mu"
+
+        takeFirst 8 "Mulder" == "Mulder"
+
+    -}
+    takeFirst : Int -> String -> String
+    takeFirst n string =
+        if n < 1 then
+            ""
+
+        else
+            slice 0 n string
+
+
+    {-| Make a new string using the last _n_ characters. If _n_ is larger than
+    the length of the string, then the string is returned as is.
+
+        takeLast 2 "Scully" == "ly"
+
+        takeLast 8 "Scully" == "Scully"
+
+    -}
+    takeLast : Int -> String -> String
+    takeLast n string =
+        if n < 1 then
+            ""
+
+        else
+            slice -n (unitLength string) string
+
+
+    {-| Drop the first _n_ characters.
+
+        dropFirst 2 "The Lone Gunmen" == "e Lone Gunmen"
+
+    -}
+    dropFirst : Int -> String -> String
+    dropFirst n string =
+        if n < 1 then
+            string
+
+        else
+            slice n (unitLength string) string
+
+
+    {-| Drop the last _n_ characters.
+
+        dropLast 2 "Cigarette Smoking Man" == "Cigarette Smoking M"
+
+    -}
+    dropLast : Int -> String -> String
+    dropLast n string =
+        if n < 1 then
+            string
+
+        else
+            slice 0 -n string
+
+
+
+    -- DETECT SUBSTRINGS
+
+
+    {-| See if the second string contains the first one.
+
+        contains "the" "theory" == True
+
+        contains "hat" "theory" == False
+
+        contains "THE" "theory" == False
+
+    -}
+    contains : String -> String -> Bool
+    contains =
+        Gren.Kernel.String.contains
+
+
+    {-| See if the second string starts with the first one.
+
+        startsWith "the" "theory" == True
+
+        startsWith "ory" "theory" == False
+
+    -}
+    startsWith : String -> String -> Bool
+    startsWith =
+        Gren.Kernel.String.startsWith
+
+
+    {-| See if the second string ends with the first one.
+
+        endsWith "the" "theory" == False
+
+        endsWith "ory" "theory" == True
+
+    -}
+    endsWith : String -> String -> Bool
+    endsWith =
+        Gren.Kernel.String.endsWith
+
+
+    {-| Find the index of the first string within the second one, if it's there.
+
+        indexOf "the" "theory" == Just 0
+
+        indexOf "ory" "theory" == Just 3
+        
+        indexOf "a" "theory" == Nothing
+
+    -}
+    firstIndexOf : String -> String -> Maybe Int
+    firstIndexOf =
+        Gren.Kernel.String.indexOf
+
+
+    {-| Find the last index of the first string within the second one, if it's there.
+
+        lastIndexOf "abra" "abracadabra" == Just 7
+
+        lastIndexOf "barb" "abracadabra" == Nothing
+
+    -}
+    lastIndexOf : String -> String -> Maybe Int
+    lastIndexOf =
+        Gren.Kernel.String.lastIndexOf
+
+
+    {-| Get all of the indices for a substring in another string.
+
+        indexes "i" "Mississippi" == [ 1, 4, 7, 10 ]
+
+        indexes "ss" "Mississippi" == [ 2, 5 ]
+
+        indexes "needle" "haystack" == []
+
+    -}
+    indices : String -> String -> Array Int
+    indices =
+        Gren.Kernel.String.indexes
+
+
+
+    -- FORMATTING
+
+
+    {-| Convert a string to all upper case. Useful for case-insensitive comparisons
+    and VIRTUAL YELLING.
+
+        toUpper "skinner" == "SKINNER"
+
+    -}
+    toUpper : String -> String
+    toUpper =
+        Gren.Kernel.String.toUpper
+
+
+    {-| Convert a string to all lower case. Useful for case-insensitive comparisons.
+
+        toLower "X-FILES" == "x-files"
+
+    -}
+    toLower : String -> String
+    toLower =
+        Gren.Kernel.String.toLower
+
+
+    {-| Pad a string on both sides until it has a given length.
+
+        pad 5 ' ' "1" == "  1  "
+
+        pad 5 ' ' "11" == "  11 "
+
+        pad 5 ' ' "121" == " 121 "
+
+    -}
+    pad : Int -> Char -> String -> String
+    pad n char string =
+        let
+            half =
+                Basics.toFloat (n - count string) / 2
+        in
+        repeat (ceiling half) (fromChar char) ++ string ++ repeat (floor half) (fromChar char)
+
+
+    {-| Pad a string on the left until it has a given length.
+
+        padLeft 5 '.' "1" == "....1"
+
+        padLeft 5 '.' "11" == "...11"
+
+        padLeft 5 '.' "121" == "..121"
+
+    -}
+    padLeft : Int -> Char -> String -> String
+    padLeft n char string =
+        repeat (n - count string) (fromChar char) ++ string
+
+
+    {-| Pad a string on the right until it has a given length.
+
+        padRight 5 '.' "1" == "1...."
+
+        padRight 5 '.' "11" == "11..."
+
+        padRight 5 '.' "121" == "121.."
+
+    -}
+    padRight : Int -> Char -> String -> String
+    padRight n char string =
+        string ++ repeat (n - count string) (fromChar char)
+
+
+    {-| Get rid of whitespace on both sides of a string.
+
+        trim "  hats  \\n" == "hats"
+
+    -}
+    trim : String -> String
+    trim =
+        Gren.Kernel.String.trim
+
+
+    {-| Get rid of whitespace on the left of a string.
+
+        trimLeft "  hats  \\n" == "hats  \\n"
+
+    -}
+    trimLeft : String -> String
+    trimLeft =
+        Gren.Kernel.String.trimLeft
+
+
+    {-| Get rid of whitespace on the right of a string.
+
+        trimRight "  hats  \\n" == "  hats"
+
+    -}
+    trimRight : String -> String
+    trimRight =
+        Gren.Kernel.String.trimRight
+
+
+
+    -- INT CONVERSIONS
+
+
+    {-| Try to convert a string into an int, failing on improperly formatted strings.
+
+        String.toInt "123" == Just 123
+
+        String.toInt "-42" == Just -42
+
+        String.toInt "3.1" == Nothing
+
+        String.toInt "31a" == Nothing
+
+    If you are extracting a number from some raw user input, you will typically
+    want to use [`Maybe.withDefault`](Maybe#withDefault) to handle bad data:
+
+        Maybe.withDefault 0 (String.toInt "42") == 42
+
+        Maybe.withDefault 0 (String.toInt "ab") == 0
+
+    -}
+    toInt : String -> Maybe Int
+    toInt =
+        Gren.Kernel.String.toInt
+
+
+    {-| Convert an `Int` to a `String`.
+
+        String.fromInt 123 == "123"
+
+        String.fromInt -42 == "-42"
+
+    Check out [`Debug.toString`](Debug#toString) to convert _any_ value to a string
+    for debugging purposes.
+
+    -}
+    fromInt : Int -> String
+    fromInt =
+        Gren.Kernel.String.fromNumber
+
+
+
+    -- FLOAT CONVERSIONS
+
+
+    {-| Try to convert a string into a float, failing on improperly formatted strings.
+
+        String.toFloat "123" == Just 123.0
+
+        String.toFloat "-42" == Just -42.0
+
+        String.toFloat "3.1" == Just 3.1
+
+        String.toFloat "31a" == Nothing
+
+    If you are extracting a number from some raw user input, you will typically
+    want to use [`Maybe.withDefault`](Maybe#withDefault) to handle bad data:
+
+        Maybe.withDefault 0 (String.toFloat "42.5") == 42.5
+
+        Maybe.withDefault 0 (String.toFloat "cats") == 0
+
+    -}
+    toFloat : String -> Maybe Float
+    toFloat =
+        Gren.Kernel.String.toFloat
+
+
+    {-| Convert a `Float` to a `String`.
+
+        String.fromFloat 123 == "123"
+
+        String.fromFloat -42 == "-42"
+
+        String.fromFloat 3.9 == "3.9"
+
+    Check out [`Debug.toString`](Debug#toString) to convert _any_ value to a string
+    for debugging purposes.
+
+    -}
+    fromFloat : Float -> String
+    fromFloat =
+        Gren.Kernel.String.fromNumber
+
+
+
+    -- ARRAY CONVERSIONS
+
+
+    {-| Convert a string to an array of characters.
+
+        toArray "abc" == [ 'a', 'b', 'c' ]
+
+        toArray "🙈🙉🙊" == [ '🙈', '🙉', '🙊' ]
+
+    -}
+    toArray : String -> Array Char
+    toArray string =
+        foldl Array.pushLast [] string
+
+
+    {-| Convert an array of characters into a String.
+        
+        fromArray [ 'a', 'b', 'c' ] == "abc"
+
+        fromArray [ '🙈', '🙉', '🙊' ] == "🙈🙉🙊"
+
+    -}
+    fromArray : Array Char -> String
+    fromArray =
+        Gren.Kernel.String.fromArray
+
+
+
+    -- CHAR CONVERSIONS
+
+
+    {-| Create a string from a given character.
+
+        fromChar 'a' == "a"
+
+    -}
+    fromChar : Char -> String
+    fromChar char =
+        pushFirst char ""
+
+
+    {-| Add a character to the beginning of a string.
+
+        pushFirst 'T' "he truth is out there" == "The truth is out there"
+
+    -}
+    pushFirst : Char -> String -> String
+    pushFirst =
+        Gren.Kernel.String.pushFirst
+
+
+    {-| Add a character to the end of a string.
+
+        pushLast 'T' "he truth is out there" == "he truth is out thereT"
+
+    -}
+    pushLast : Char -> String -> String
+    pushLast =
+        Gren.Kernel.String.pushLast
+
+
+    {-| Split a non-empty string into its first character and its remaining characters. This lets you
+    pattern match on strings exactly as you would with arrays.
+
+        popFirst "abc" == Just { first = 'a', rest = "bc" }
+
+        popFirst "" == Nothing
+
+    -}
+    popFirst : String -> Maybe { first : Char, rest : String }
+    popFirst =
+        Gren.Kernel.String.popFirst
+
+
+    {-| Split a non-empty string into its last character and its remaining characters. This lets you
+    pattern match on strings exactly as you would with arrays.
+
+        popLast "abc" == Just { first = 'c', rest = "ab" }
+
+        popLast "" == Nothing
+
+    -}
+    popLast : String -> Maybe { last : Char, rest : String }
+    popLast =
+        Gren.Kernel.String.popLast
+
+
+    -- HIGHER-ORDER FUNCTIONS
+
+
+    {-| Transform every character in a string
+
+        map
+            (\\c ->
+                if c == '/' then
+                    '.'
+
+                else
+                    c
+            )
+            "a/b/c"
+            == "a.b.c"
+
+    -}
+    map : (Char -> Char) -> String -> String
+    map fn str =
+        foldl
+            (\\char acc ->
+                pushLast (fn char) acc
+            )
+            ""
+            str
+
+
+    {-| Keep only the characters that pass the test.
+
+        keepIf isDigit "R2-D2" == "22"
+
+    -}
+    keepIf : (Char -> Bool) -> String -> String
+    keepIf isGood str =
+        foldl
+            (\\char acc ->
+                if isGood char then
+                    pushLast char acc
+
+                else
+                    acc
+            )
+            ""
+            str
+
+
+    {-| Reduce a string from the beginning.
+
+        foldl cons "" "time" == "emit"
+
+    -}
+    foldl : (Char -> b -> b) -> b -> String -> b
+    foldl =
+        Gren.Kernel.String.foldl
+
+
+    {-| Reduce a string from the end.
+
+        foldr cons "" "time" == "time"
+
+    -}
+    foldr : (Char -> b -> b) -> b -> String -> b
+    foldr =
+        Gren.Kernel.String.foldr
+
+
+    {-| Determine whether _any_ characters pass the test.
+
+        any isDigit "90210" == True
+
+        any isDigit "R2-D2" == True
+
+        any isDigit "heart" == False
+
+        any isDigit "" == False
+
+    -}
+    any : (Char -> Bool) -> String -> Bool
+    any =
+        Gren.Kernel.String.any
+
+
+    {-| Determine whether _all_ characters pass the test.
+
+        all isDigit "90210" == True
+
+        all isDigit "R2-D2" == False
+
+        all isDigit "heart" == False
+
+        all isDigit "" = True
+
+    -}
+    all : (Char -> Bool) -> String -> Bool
+    all isGood str =
+        not (any (not << isGood) str)
+
+
+    -- UNITS
+
+
+    {-| Get the number of character units in a string. As strings are, essentially,
+    arrays of character units, this is a constant time operation.
+    -}
+    unitLength : String -> Int
+    unitLength =
+        Gren.Kernel.String.unitLength
+
+
+    {-| Retrieve the character unit at a given index, or `Nothing` if the index is out of bounds.
+    A negative index uses the end of the string as the starting point.
+
+        getUnit 1 "abc" == Just 'b'
+        
+        getUnit 10 "abc" == Nothing
+        
+        getUnit -1 "abc" == Just 'c'
+
+    -}
+    getUnit : Int -> String -> Maybe Char
+    getUnit =
+        Gren.Kernel.String.getUnit
+
+
+    {-| Reduce a string from the beginning. The given function will receive character units instead
+    of a code point, meaning that the provided `Char` could possibly represent one half of a full
+    character.
+
+        foldlUnits pushFirst "" "time" == "emit"
+    -}
+    foldlUnits : (Char -> b -> b) -> b -> String -> b
+    foldlUnits =
+        Gren.Kernel.String.foldlUnits
+
+
+    {-| Reduce a string from the end. The given function will receive character units instead
+    of a code point, meaning that the provided `Char` could possibly represent one half of a full
+    character.
+
+        foldrUnits pushFirst "" "time" == "time"
+    -}
+    foldrUnits : (Char -> b -> b) -> b -> String -> b
+    foldrUnits =
+        Gren.Kernel.String.foldrUnits
+
+    {-| Take a substring given a start and end index. Negative indexes
+    are taken starting from the _end_ of the array. Indexes refers to character units,
+    _not_ code points!
+
+        sliceUnits 1 -1 "snakes" == "nake"
+
+        sliceUnits 2 5 "snakes" == "ake"
+
+        sliceUnits 3 5 "hi 😎 there" == "😎"
+    -}
+    sliceUnits : Int -> Int -> String -> String
+    sliceUnits =
+        Gren.Kernel.String.sliceUnits
+    """

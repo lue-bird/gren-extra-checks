@@ -1,0 +1,15 @@
+.gren
+gren-stuff
+gren_packages
+preview/gren.js
+preview/preprocess.js
+*.log
+node_modules/
+demo/index.html
+.coverage
+.idea/
+artifacts.dat
+zombie/
+temporary/
+src-compiled/
+package-lock.json

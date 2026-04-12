@@ -1,0 +1,117 @@
+module StringSpellsCompanyNameCorrectly exposing (check)
+
+import SourcePosition
+import ExtraCheck
+import Compiler.Ast.Source
+import Array.Builder
+
+
+check : ExtraCheck.Check
+check =
+    ExtraCheck.create
+        { inspect =
+            [ ExtraCheck.inspectModule moduleDataToKnowledge
+            ]
+        , knowledgeMerge = knowledgeMerge
+        , report = report
+        }
+
+
+type alias Knowledge =
+    { typosInStrings :
+        Array { modulePath : String, region : SourcePosition.Region }
+    }
+
+
+moduleDataToKnowledge :
+    { path : String, syntax : Compiler.Ast.Source.Module, source : String }
+    -> Knowledge
+moduleDataToKnowledge moduleData =
+    { typosInStrings =
+        moduleData.syntax.values
+            |> Array.mapAndFlatten
+                (\functionDeclaration ->
+                    functionDeclaration.value.value.body
+                        |> expressionToTyposInStringsInto (Array.Builder.empty 0)
+                        |> Array.Builder.toArray
+                )
+            |> Array.map
+                (\typoRegion ->
+                    { region = typoRegion
+                    , modulePath = moduleData.path
+                    }
+                )
+    }
+
+expressionToTyposInStringsInto :
+    Array.Builder.Builder SourcePosition.Region
+    -> Compiler.Ast.Source.Expression
+    -> Array.Builder.Builder SourcePosition.Region
+expressionToTyposInStringsInto resultRegionsSoFar expression =
+    when expression.value is
+        Compiler.Ast.Source.StringLiteral string ->
+            resultRegionsSoFar
+                |> Array.Builder.append            
+                    (string
+                        |> ExtraCheck.sourceRegionsOf "frits.com"
+                        |> Array.map (rangeRelativeTo expression.start)
+                    )
+
+        _ ->
+            expression.value
+                |> ExtraCheck.expressionImmediateSubsFold
+                    (\sub withSubsSoFar ->
+                        expressionToTyposInStringsInto withSubsSoFar sub
+                    )
+                    resultRegionsSoFar
+
+
+rangeRelativeTo :
+    SourcePosition.Position
+    -> SourcePosition.Region
+    -> SourcePosition.Region
+rangeRelativeTo baseStart offsetRange =
+    { start = offsetRange.start |> locationRelativeTo baseStart
+    , end = offsetRange.end |> locationRelativeTo baseStart
+    }
+
+
+locationRelativeTo :
+    SourcePosition.Position
+    -> SourcePosition.Position
+    -> SourcePosition.Position
+locationRelativeTo baseStart offsetLocation =
+    when offsetLocation.row is
+        1 ->
+            { row = baseStart.row
+            , col = baseStart.col + offsetLocation.col
+            }
+
+        offsetRowAtLeast2 ->
+            { row = baseStart.row + (offsetRowAtLeast2 - 1)
+            , col = offsetLocation.col
+            }
+
+
+knowledgeMerge : Knowledge -> Knowledge -> Knowledge
+knowledgeMerge a b =
+    { typosInStrings = a.typosInStrings ++ b.typosInStrings
+    }
+
+
+report : Knowledge -> Array ExtraCheck.Error
+report knowledge =
+    knowledge.typosInStrings
+        |> Array.map
+            (\stringWithTypos ->
+                { path = stringWithTypos.modulePath
+                , message = "misspelled fruits.com"
+                , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                , region = stringWithTypos.region
+                , fix =
+                    [ { path = stringWithTypos.modulePath
+                      , edits = [ ExtraCheck.replaceRegion stringWithTypos.region "fruits.com" ]
+                      }
+                    ]
+                }
+            )

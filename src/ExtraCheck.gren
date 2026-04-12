@@ -1,0 +1,2905 @@
+module ExtraCheck exposing
+    ( ignoreErrorsForPathsWhere
+    , create
+    , inspectElmJson, inspectDirectDependencies, inspectExtraFile, inspectModule
+    , Error, grenJsonPath
+    , SourceEdit(..), insertAt, removeRegion, replaceRegion
+    , determineModuleOrigin, importsToExplicit
+    , expressionImmediateSubsFold
+    , moduleExposes, exposedArrayToExposes
+    , sourceExtractInRange, sourceRegionsOf
+    , outlineExposedModuleNameSet
+    , test, applicationConfigurationMinimal, ExpectedErrorRange(..)
+    , Inspect(..), Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
+    )
+
+{-| A check inspects modules, `gren.json`, dependencies and extra files like `README.md` from your project
+and uses the combined knowledge to report problems.
+
+@docs ignoreErrorsForPathsWhere
+
+Everything below is intended for writing a new check.
+
+@docs create
+
+Alongside your implementation, write [tests](#testing),
+document what is enforced, what the goal is and which situations the check makes sense
+and add examples of patterns that will (not) be reported.
+
+
+# inspecting
+
+Collect knowledge from parts of the project.
+
+@docs inspectElmJson, inspectDirectDependencies, inspectExtraFile, inspectModule
+
+
+# reporting
+
+@docs Error, grenJsonPath
+@docs SourceEdit, insertAt, removeRegion, replaceRegion
+
+# convenience helpers
+
+Various helpers for [`Compiler.Ast.Source`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source)
+and other project data that is often useful when writing a check.
+
+For example,
+by only listing all immediate sub-parts of a piece of syntax you can choose to traverse it however you need to.
+E.g. to find all `as` pattern regions
+
+    findAllAsPatternRanges :
+        SourcePosition.Located ELm.Syntax.Pattern.Pattern
+        -> Array ELm.Syntax.Range.Range
+    findAllAsPatternRanges patternNode =
+        (when patternNode is
+            SourcePosition.Located asRange (Gren.Syntax.Pattern.AsPattern _ _) ->
+                [ asRange ]
+
+            _ ->
+                []
+        )
+            ++ (patternNode |> ExtraCheck.patternSubs |> Array.mapAndFlatten findAllAsPatternRanges)
+
+This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
+
+TODO add helper to traverse pattern and type and expression with introduced local bindings sub-AST located nodes
+
+@docs expressionImmediateSubsFold
+@docs determineModuleOrigin, importsToExplicit
+@docs moduleExposes, exposedArrayToExposes
+@docs sourceExtractInRange, sourceRegionsOf
+@docs outlineExposedModuleNameSet
+
+Suggestions to add, remove or change helpers welcome!
+sourceRegionsOf
+
+# testing
+
+Using [`gren-lang/test`](https://packages.gren-lang.org/package/gren-lang/test/version/latest/overview).
+
+Implementing a check works really well in a Test-Driven loop:
+
+  - write a failing test before writing any code. Run it to make sure that it is failing.
+    Also write tests to ensure cases _similar_ to what you want to report are not reported.
+    For instance, if you wish to report uses of variables named `foo`, write a test
+    that ensures that the use of variables named differently does not get reported
+  - write simple (almost stupid) check code to make the test pass,
+    using `Debug.todo` etc to cut corner cases
+  - run the tests again and make sure that both new and previous tests are passing
+
+Then repeat for every when that needs to be handled.
+Ideally, by only reading through the test titles, someone else should be able to
+recreate the rule you are testing.
+
+Tests are cheap and it is better to have too many tests rather than too few,
+since the behavior of a check rarely changes drastically.
+
+@docs test, applicationConfigurationMinimal, ExpectedErrorRange
+
+
+# running
+
+Make `gren-extra-checks` run in a new environment
+
+@docs Inspect, Check, run, sourceApplyEdits, SourceEditError, Run
+
+-}
+
+import Ansi
+import Dict exposing (Dict)
+import Diff
+import GrenCoreDependency
+import Expect
+import DictLocalExtra
+import Json.Decode
+import ArrayLocalExtra
+import Set exposing (Set)
+import SetLocalExtra
+import Unicode
+import SourcePosition
+import Compiler.Ast.Source
+import Array.Builder
+import String.Parser.Advanced
+import Compiler.Parse.Module
+import Compiler.Parse.Context
+import FileSystem.Path
+import Compiler.Outline
+import Compiler.ModuleName
+
+
+{-| A construct that can inspect your project files and report errors, see [`ExtraCheck.create`](ExtraCheck#create)
+-}
+type alias Check =
+    { ignoreErrorsForPathsWhere : String -> Bool
+    , run : Run
+    }
+
+
+{-| A function that inspects, folds knowledge and reports errors in one go, and provides
+a recursively-defined future run function that already has the calculated knowledges cached.
+
+Does it need to be so complicated?
+
+Different checks can have different knowledge types,
+so how can we put all of them in a single list?
+No problem, hide this parameter by only storing the combined run function from project files to errors.
+
+But how do we implement caching this way
+(only re-run inspections for files that changed, otherwise take the already computed knowledge parts)?
+I know about roughly three options:
+
+  - require users to provide encode/decode pairs to some generic structure
+      - the ability to use the encoded cache at any time enables write to disk
+        (not a goal of `gren-extra-checks` but having the option is nice)
+      - the ability to show the encoded cache in a gren debugger
+        (undeniably cool, though that only works in the browser. `Debug.log` is likely a nice enough alternative)
+      - the ability to export the produced json for external use
+        (not a goal of `gren-extra-checks` but undeniably cool, similar to `elm-review` insights/extract although less explicit)
+      - quite a burden users should preferably not bear
+
+  - use js shenanigans to effectively "cast specific context type to any" and "cast any to specific context type"
+    similar to [linsyking/elm-anytype](https://packages.gren-lang.org/package/packages/linsyking/elm-anytype/latest/)
+      - faster than any possible alternative
+      - simpler gren internals than any possible alternative
+      - the highest possible degree of danger, as incorrect casting is always possible
+        (+ no way to control that `ExtraCheck.run` users wire them correctly)
+      - custom embeds of running checks (e.g. if you wanted to create a browser playground)
+        always need additional js hacking which to me is deal breaking
+
+  - provide a future function as a result which knows about the
+    previously calculated knowledges.
+    I was surprised to find that it's almost trivial to implement and even cuts down
+    internal complexity compared to something like the codec one.
+    If you're intrigued and have a week,
+    some smart folks have written [an entertaining dialog-blog-ish series about these "Jeremy's interfaces"](https://discourse.gren-lang.org/t/demystifying-jeremys-interfaces/8834)
+      - still very fast (much faster than the codec one)
+      - concise internals
+      - possibly less flexible for implementing stuff like shared knowledge
+        (I much prefer defunctionalization wherever possible)
+      - slightly less obvious than the codec one
+
+I didn't expect to ever need to resort to such a complex feature but here we are.
+Though I'm always excited to try and experiment with other options (except the codec one which I already tried), issues welcome!
+
+-}
+type Run
+    = Run
+        ({ grenJson : { source : String, outline : Compiler.Outline.Outline }
+         , directDependencies :
+            Array
+                { outline : Compiler.Outline.PkgOutline
+                , modules :
+                    Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+                }
+         , addedOrChangedExtraFiles : Array { path : String, source : String }
+         , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+         , removedExtraFilePaths : Array String
+         , removedModulePaths : Array String
+         }
+         ->
+            { errorsByPath :
+                Dict
+                    String
+                    (Array
+                        { region : SourcePosition.Region
+                        , message : String
+                        , details : Array String
+                        , fixEditsByPath : Dict String (Array SourceEdit)
+                        }
+                    )
+            , nextRun : Run
+            }
+        )
+
+
+{-| How to collect knowledge from scanning a single part of the project
+-}
+type Inspect knowledge
+    = InspectDirectDependencies
+        (Array
+            { outline : Compiler.Outline.PkgOutline
+            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+            }
+         -> knowledge
+        )
+    | InspectGrenJson ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
+    | InspectExtraFile ({ path : String, source : String } -> knowledge)
+    | InspectModule
+        ({ syntax : Compiler.Ast.Source.Module, source : String, path : String }
+         -> knowledge
+        )
+
+
+{-| Relative path to the project gren.json to be used in an [`Error`](#Error) or [expected test error](ExtraCheck#test).
+Always equal to `"gren.json"`
+-}
+grenJsonPath : String
+grenJsonPath =
+    "gren.json"
+
+
+{-| Collect knowledge from a module file.
+
+The path is relative to the project's `gren.json`
+and can be used as an [`Error`](#Error) target file path.
+
+The raw gren file source can be used
+to preserve existing formatting in a region
+in when you want to move and copy things around,
+see [`sourceExtractInRange`](#sourceExtractInRange).
+
+The `syntax` field contains a tree-like structure which represents your source code:
+[`Compiler.Ast.Source.Module`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source#Module).
+I recommend having the documentation for that package open while writing a check.
+
+
+### syntax.imports
+
+The module's
+[import statements](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source#Import)
+(`import Html as H exposing (div)`) in order of their definition.
+A nice helper to get the exposes: [`exposedArrayToExposes`](#exposedArrayToExposes)
+
+An example check that forbids importing both `Element` (`gren-ui`) and
+`Html.Styled` (`gren-css`) in the same module:
+
+    import Gren.Syntax.Import
+    import Gren.Syntax.Node
+    import Gren.Syntax.Range
+    import ExtraCheck
+    import Dict
+
+    check : ExtraCheck.Check
+    check =
+        ExtraCheck.create
+            { inspect =
+                [ ExtraCheck.inspectModule
+                    (\moduleData ->
+                        let
+                            importedModuleNames : Dict String SourcePosition.Region
+                            importedModuleNames =
+                                moduleData.syntax.imports
+                                    |> Array.map
+                                        (\(SourcePosition.Located _ import_) ->
+                                            ( import.moduleName |> Gren.Syntax.Node.value, import.moduleName |> Gren.Syntax.Node.region )
+                                        )
+                                    |> Dict.fromList
+                        in
+                        when
+                            Maybe.map2 (\elementImportRange _ -> elementImportRange)
+                                (importedModuleNames |> Dict.get [ "Element" ])
+                                (importedModuleNames |> Dict.get [ "Html", "Styled" ])
+                        is
+                            Just elementImportRange ->
+                                Dict.singleton moduleData.path elementImportRange
+
+                            _ ->
+                                Dict.empty
+                    )
+                ]
+            , knowledgeMerge = \a b -> Dict.union a b
+            , report =
+                \invalidImportsByPath ->
+                    invalidImportsByPath
+                        |> Dict.toList
+                        |> Array.map
+                            (\{ key = path, value = elementImportRange } ->
+                                { path = moduleData.path
+                                , message = "both `gren-ui` and `gren-css` used"
+                                , details = [ "At fruits.com, we use `gren-ui` in the dashboard application, and `gren-css` in the rest of the code. We want to use `gren-ui` in our new projects, but in projects using `gren-css`, we don't want to use both libraries to keep things simple." ]
+                                , region = elementImportRange
+                                , fix = []
+                                }
+                            )
+            }
+
+-}
+inspectModule :
+    ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
+    -> Inspect knowledge
+inspectModule moduleDataToKnowledge =
+    InspectModule moduleDataToKnowledge
+
+
+{-| Collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Project#Project).
+You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
+-}
+inspectElmJson :
+    ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
+    -> Inspect knowledge
+inspectElmJson moduleDataToKnowledge =
+    InspectGrenJson moduleDataToKnowledge
+
+
+{-| Collect knowledge from an available files like README.md or CHANGELOG.md that aren't source modules or the gren.json.
+The provided path is relative to the project's `gren.json`
+and can be used as an [`Error`](#Error) target file path
+-}
+inspectExtraFile : ({ path : String, source : String } -> knowledge) -> Inspect knowledge
+inspectExtraFile moduleDataToKnowledge =
+    InspectExtraFile moduleDataToKnowledge
+
+
+{-| Collect knowledge from all [project configs](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Project#Project)
+and [module docs](https://packages.gren-lang.org/package/packages/gren-lang/project-metadata-utils/latest/Elm-Docs#Module)
+the project directly depends on
+-}
+inspectDirectDependencies :
+    (Array 
+        { outline : Compiler.Outline.PkgOutline
+        , modules :
+            Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+        }
+        -> knowledge
+    )
+    -> Inspect knowledge
+inspectDirectDependencies moduleDataToKnowledge =
+    InspectDirectDependencies moduleDataToKnowledge
+
+
+{-| To write a new [`Check`](#Check) you need to
+
+  - `inspect`: what parts to collect what knowledge from, see ["inspecting"](#inspecting)
+  - `knowledgeMerge`: combine collected knowledge from different parts
+  - `report`: evaluate your combined knowledge and provide [errors](#Error)
+
+-}
+create :
+    { inspect : Array (Inspect knowledge)
+    , knowledgeMerge : knowledge -> knowledge -> knowledge
+    , report : knowledge -> Array Error
+    }
+    -> Check
+create check =
+    let
+        toKnowledges :
+            { directDependenciesToKnowledge :
+                Array.Builder.Builder
+                    (Array
+                        { outline : Compiler.Outline.PkgOutline
+                        , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+                        }
+                     -> knowledge
+                    )
+            , grenJsonToKnowledge : Array.Builder.Builder ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
+            , extraFileToKnowledge : Array.Builder.Builder ({ path : String, source : String } -> knowledge)
+            , moduleToKnowledge : Array.Builder.Builder ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
+            }
+        toKnowledges =
+            check.inspect |> inspectToToKnowledges
+
+        knowledgesFoldMapToMaybe : (element -> knowledge) -> Array element -> Maybe knowledge
+        knowledgesFoldMapToMaybe elementToKnowledge knowledges =
+            when knowledges |> Array.popLast is
+                Nothing ->
+                    Nothing
+
+                Just { last = one, initial = others } ->
+                    others
+                        |> Array.foldl
+                            (\element soFar ->
+                                soFar |> check.knowledgeMerge (element |> elementToKnowledge)
+                            )
+                            (one |> elementToKnowledge)
+                        |> Just
+
+        moduleToMaybeKnowledge :
+            { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+            -> Maybe { path : String, knowledge : knowledge }
+        moduleToMaybeKnowledge moduleFile =
+            toKnowledges.moduleToKnowledge
+                |> Array.Builder.toArray
+                |> knowledgesFoldMapToMaybe (\f -> f moduleFile)
+                |> Maybe.map
+                    (\foldedKnowledge ->
+                        { path = moduleFile.path
+                        , knowledge = foldedKnowledge
+                        }
+                    )
+
+        runWithCache : Cache knowledge -> Run
+        runWithCache cache =
+            -- IGNORE TCO
+            Run
+                (\project ->
+                    let
+                        grenJsonKnowledgeAndCache : Maybe knowledge
+                        grenJsonKnowledgeAndCache =
+                            when cache.grenJsonKnowledge is
+                                Just grenJsonKnowledgeCache ->
+                                    grenJsonKnowledgeCache |> Just
+
+                                Nothing ->
+                                    toKnowledges.grenJsonToKnowledge
+                                        |> Array.Builder.toArray
+                                        |> knowledgesFoldMapToMaybe (\f -> f project.grenJson)
+
+                        directDependenciesKnowledgeAndCache : Maybe knowledge
+                        directDependenciesKnowledgeAndCache =
+                            when cache.directDependenciesKnowledge is
+                                Just knowledge ->
+                                    knowledge |> Just
+
+                                Nothing ->
+                                    toKnowledges.directDependenciesToKnowledge
+                                        |> Array.Builder.toArray
+                                        |> knowledgesFoldMapToMaybe (\f -> f project.directDependencies)
+
+                        moduleKnowledges : Array { path : String, knowledge : knowledge }
+                        moduleKnowledges =
+                            Dict.merge
+                                (\_ new soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\_ new _ soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\path knowledgeCache soFar ->
+                                    soFar
+                                        |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache } 
+                                )
+                                (project.addedOrChangedModules
+                                    |> DictLocalExtra.fromArrayMap
+                                        (\file ->
+                                            { key = file.path
+                                            , value = file |> moduleToMaybeKnowledge
+                                            }
+                                        )
+                                )
+                                (cache.moduleKnowledgeByPath
+                                    |> dictRemoveKeys project.removedModulePaths
+                                )
+                                (Array.Builder.empty 2)
+                                |> Array.Builder.toArray
+
+                        extraFileToMaybeKnowledge :
+                            { path : String, source : String }
+                            -> Maybe { path : String, knowledge : knowledge }
+                        extraFileToMaybeKnowledge fileInfo =
+                            toKnowledges.extraFileToKnowledge
+                                |> Array.Builder.toArray
+                                |> knowledgesFoldMapToMaybe (\f -> f fileInfo)
+                                |> Maybe.map
+                                    (\foldedKnowledge ->
+                                        { path = fileInfo.path
+                                        , knowledge = foldedKnowledge
+                                        }
+                                    )
+
+                        extraFilesKnowledges : Array { path : String, knowledge : knowledge }
+                        extraFilesKnowledges =
+                            Dict.merge
+                                (\_ new soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\_ new _ soFar -> soFar |> ArrayLocalExtra.builderPushLastJust new)
+                                (\path knowledgeCache soFar ->
+                                    soFar
+                                        |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache }
+                                )
+                                (project.addedOrChangedExtraFiles
+                                    |> DictLocalExtra.fromArrayMap
+                                        (\file ->
+                                            { key = file.path
+                                            , value = file |> extraFileToMaybeKnowledge
+                                            }
+                                        )
+                                )
+                                (cache.extraFileKnowledgeByPath
+                                    |> dictRemoveKeys project.removedExtraFilePaths
+                                )
+                                (Array.Builder.empty 0)
+                                |> Array.Builder.toArray
+
+                        allKnowledges : Array knowledge
+                        allKnowledges =
+                            ((moduleKnowledges |> Array.map .knowledge)
+                                ++ (extraFilesKnowledges |> Array.map .knowledge)
+                            )
+                                |> ArrayLocalExtra.pushLastJust directDependenciesKnowledgeAndCache
+                                |> ArrayLocalExtra.pushLastJust grenJsonKnowledgeAndCache
+                    in
+                    when allKnowledges |> knowledgesFoldMapToMaybe Basics.identity is
+                        Nothing ->
+                            { errorsByPath = Dict.empty, nextRun = runWithCache knowledgeCacheEmpty }
+
+                        Just completeKnowledge ->
+                            { errorsByPath =
+                                completeKnowledge
+                                    |> check.report
+                                    |> Array.foldl
+                                        (\error soFar ->
+                                            soFar
+                                                |> Dict.update
+                                                    error.path
+                                                    (\errorsForPathSoFar ->
+                                                        errorsForPathSoFar
+                                                            |> Maybe.withDefault (Array.Builder.empty 1)
+                                                            |> Array.Builder.pushLast
+                                                                { message = error.message
+                                                                , details = error.details
+                                                                , region = error.region
+                                                                , fixEditsByPath = error.fix |> fixToFileEditsByPath
+                                                                }
+                                                            |> Just
+                                                    )
+                                        )
+                                        Dict.empty
+                                        |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
+                            , nextRun =
+                                runWithCache
+                                    { grenJsonKnowledge = grenJsonKnowledgeAndCache
+                                    , directDependenciesKnowledge = directDependenciesKnowledgeAndCache
+                                    , moduleKnowledgeByPath =
+                                        moduleKnowledges
+                                            |> DictLocalExtra.fromArrayMap
+                                                (\moduleKnowledge ->
+                                                    { key = moduleKnowledge.path, value = moduleKnowledge.knowledge }
+                                                )
+                                    , extraFileKnowledgeByPath =
+                                        extraFilesKnowledges
+                                            |> DictLocalExtra.fromArrayMap
+                                                (\extraFileKnowledge ->
+                                                    { key = extraFileKnowledge.path, value = extraFileKnowledge.knowledge }
+                                                )
+                                    }
+                            }
+                )
+    in
+    { ignoreErrorsForPathsWhere = \_ -> False
+    , run = runWithCache knowledgeCacheEmpty
+    }
+
+
+fixToFileEditsByPath :
+    Array { path : String, edits : Array SourceEdit }
+    -> Dict String (Array SourceEdit)
+fixToFileEditsByPath fix =
+    fix
+        |> Array.foldl
+            (\fileFix soFar ->
+                soFar
+                    |> Dict.update fileFix.path
+                        (\editsSoFar ->
+                            if (editsSoFar |> Maybe.checkValue (\_ -> True)) && (fileFix.edits |> Array.isEmpty) then
+                                Nothing
+
+                            else
+                                fileFix.edits ++ (editsSoFar |> Maybe.withDefault []) |> Just
+                        )
+            )
+            Dict.empty
+
+
+knowledgeCacheEmpty : Cache knowledge_
+knowledgeCacheEmpty =
+    { grenJsonKnowledge = Nothing
+    , directDependenciesKnowledge = Nothing
+    , moduleKnowledgeByPath = Dict.empty
+    , extraFileKnowledgeByPath = Dict.empty
+    }
+
+
+inspectToToKnowledges :
+    Array (Inspect knowledge)
+    ->
+        { directDependenciesToKnowledge :
+            Array.Builder.Builder
+                (Array
+                    { outline : Compiler.Outline.PkgOutline
+                    , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+                    }
+                 -> knowledge
+                )
+        , grenJsonToKnowledge : Array.Builder.Builder ({ source : String, outline : Compiler.Outline.Outline } -> knowledge)
+        , extraFileToKnowledge : Array.Builder.Builder ({ path : String, source : String } -> knowledge)
+        , moduleToKnowledge : Array.Builder.Builder ({ syntax : Compiler.Ast.Source.Module, source : String, path : String } -> knowledge)
+        }
+inspectToToKnowledges inspect =
+    inspect
+        |> Array.foldl
+            (\inspectSingle soFar ->
+                when inspectSingle is
+                    InspectDirectDependencies toKnowledge ->
+                        { directDependenciesToKnowledge =
+                            soFar.directDependenciesToKnowledge
+                                |> Array.Builder.pushLast toKnowledge
+                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
+                        , extraFileToKnowledge = soFar.extraFileToKnowledge
+                        , moduleToKnowledge = soFar.moduleToKnowledge
+                        }
+
+                    InspectGrenJson toKnowledge ->
+                        { grenJsonToKnowledge =
+                            soFar.grenJsonToKnowledge
+                                |> Array.Builder.pushLast toKnowledge
+                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
+                        , extraFileToKnowledge = soFar.extraFileToKnowledge
+                        , moduleToKnowledge = soFar.moduleToKnowledge
+                        }
+
+                    InspectExtraFile toKnowledge ->
+                        { extraFileToKnowledge =
+                            soFar.extraFileToKnowledge
+                                |> Array.Builder.pushLast toKnowledge
+                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
+                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
+                        , moduleToKnowledge = soFar.moduleToKnowledge
+                        }
+
+                    InspectModule toKnowledge ->
+                        { moduleToKnowledge =
+                            soFar.moduleToKnowledge
+                                |> Array.Builder.pushLast toKnowledge
+                        , directDependenciesToKnowledge = soFar.directDependenciesToKnowledge
+                        , grenJsonToKnowledge = soFar.grenJsonToKnowledge
+                        , extraFileToKnowledge = soFar.extraFileToKnowledge
+                        }
+            )
+            { directDependenciesToKnowledge = Array.Builder.empty 0
+            , grenJsonToKnowledge = Array.Builder.empty 0
+            , extraFileToKnowledge = Array.Builder.empty 0
+            , moduleToKnowledge = Array.Builder.empty 1
+            }
+
+
+dictRemoveKeys : Array comparableKey -> (Dict comparableKey v -> Dict comparableKey v)
+dictRemoveKeys listOfKeysToRemove dict =
+    listOfKeysToRemove
+        |> Array.foldl Dict.remove dict
+
+
+{-| A problem to report in a given file and region, possibly suggesting a fix with [`SourceEdit`](#SourceEdit)s
+
+Take the gren compiler errors as inspiration in terms of helpfulness:
+
+  - error `message`: half-sentence on what is bad here. A user
+    that has encountered this error multiple times should know exactly what to do.
+    Example: "Module.helper is never used" → this helper can be removed
+  - error `details`: additional information such as the rationale and suggestions
+    for a solution or alternative
+  - error report `region`: The region marked as problematic. Make this section as small as
+    possible. For instance, in a rule that would forbid
+    `Debug.log`, you would want the error to appear at `Debug.log`, not on the whole
+    function call
+
+-}
+type alias Error =
+    { path : String
+    , region : SourcePosition.Region
+    , message : String
+    , details : Array String
+    , fix : Array { path : String, edits : Array SourceEdit }
+    }
+
+
+{-| Specify where you don't want errors to be reported in:
+
+  - an external library you copied over and don't want to modify more than necessary
+  - generated source code which isn't supposed to be read and or over which you have little control
+  - you wrote a check that is very specific and should only be applied for a portion of your codebase
+
+`tests/` is never inspected
+
+-}
+ignoreErrorsForPathsWhere : (String -> Bool) -> Check -> Check
+ignoreErrorsForPathsWhere filterOut check =
+    { run = check.run
+    , ignoreErrorsForPathsWhere =
+        \path ->
+            (path |> check.ignoreErrorsForPathsWhere) || (path |> filterOut)
+    }
+
+
+{-| ExtraCheck a given project and return the errors reported by the given [`Check`](#Check)
+as a dict along with a next [`Run`](#Run) that uses cached knowledge wherever it can.
+
+    import ExtraCheck
+    import SomeConvention
+
+    doCheck =
+        let
+            project =
+                { addedOrChangedModules =
+                    [ { path = "src/A.gren", source = "module A exposing (a)\na = 1", syntax = ... }
+                    , { path = "src/B.gren", source = "module B exposing (b)\nb = 1", syntax = ... }
+                    ]
+                , ...
+                }
+
+            runResult =
+                ExtraCheck.run SomeConvention.check project
+        in
+        doSomethingWith runResult.errorsByPath
+
+The resulting next [`Run`](#Run) internally keeps a cache to make it faster to re-run the check when only some files have changed.
+You can store this resulting `nextRun` in your application state type, e.g.
+
+    ExtraCheck.run
+        { run = yourApplicationState.nextRunProvidedByTheLastCheckRun
+        , ignoreErrorsForPathsWhere = SomeConvention.check.ignoreErrorsForPathsWhere
+        }
+        { addedOrChangedModules =
+            [ { path = "src/C.gren", source = "module C exposing (c)\nc = 1", syntax = ... }
+            ]
+        , removedModulePaths = [ "src/B.gren" ]
+        , ...
+        }
+
+-}
+run :
+    Check
+    ->
+        { grenJson : { source : String, outline : Compiler.Outline.Outline }
+        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }
+        , addedOrChangedExtraFiles : Array { path : String, source : String }
+        , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        , removedExtraFilePaths : Array String
+        , removedModulePaths : Array String
+        }
+    ->
+        { errorsByPath :
+            Dict
+                String
+                (Array
+                    { region : SourcePosition.Region
+                    , message : String
+                    , details : Array String
+                    , fixEditsByPath : Dict String (Array SourceEdit)
+                    }
+                )
+        , nextRun : Run
+        }
+run check project =
+    project |> (check.run |> (\(Run r) -> r))
+
+
+{-| Cache for the result of the analysis of an inspected project part (modules, gren.json, extra files, direct dependencies).
+-}
+type alias Cache knowledge =
+    { grenJsonKnowledge : Maybe knowledge
+    , directDependenciesKnowledge : Maybe knowledge
+    , moduleKnowledgeByPath : Dict String knowledge
+    , extraFileKnowledgeByPath : Dict String knowledge
+    }
+
+
+{-| In when you need the read the source in a region as formatted by the user.
+This can be nice to keep the user's formatting if you just move code around
+-}
+sourceExtractInRange : SourcePosition.Region -> String -> String
+sourceExtractInRange region string =
+    string
+        |> String.lines
+        |> Array.dropFirst (region.start.row - 1)
+        |> Array.takeFirst (region.end.row - region.start.row + 1)
+        |> ArrayLocalExtra.lastMap (Unicode.takeFirst (region.end.col - 1))
+        |> String.join "\n"
+        |> Unicode.dropFirst (region.start.col - 1)
+
+
+{-| Find all occurrences of a given section in the source in the when you
+can't access or easily calculate the [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region)
+-}
+sourceRegionsOf : String -> String -> Array SourcePosition.Region
+sourceRegionsOf sectionToFind source =
+    let
+        sectionToFindLength : Int
+        sectionToFindLength =
+            sectionToFind |> Unicode.length
+    in
+    source
+        |> String.indices sectionToFind
+        |> Array.map
+            (\startOffset ->
+                { start = startOffset |> sourceOffsetToLocationIn source
+                , end = (startOffset + sectionToFindLength) |> sourceOffsetToLocationIn source
+                }
+            )
+
+
+sourceOffsetToLocationIn : String -> Int -> SourcePosition.Position
+sourceOffsetToLocationIn source sourceOffset =
+    let
+        lines : Array String
+        lines =
+            source |> Unicode.takeFirst sourceOffset |> String.lines
+    in
+    { row = lines |> Array.length
+    , col =
+        when lines |> Array.last is
+            Nothing ->
+                1
+
+            Just lastLine ->
+                (lastLine |> Unicode.length) + 1
+    }
+
+
+{-| The set of modules in the `exposed-modules` field in a package gren.json
+-}
+outlineExposedModuleNameSet : Compiler.Outline.Exposed -> Set String
+outlineExposedModuleNameSet exposed =
+    when exposed is 
+        Compiler.Outline.ExposedArray array ->
+            array |> SetLocalExtra.fromListMap Compiler.ModuleName.toString
+
+        Compiler.Outline.ExposedDict dict ->
+            dict
+                |> Dict.foldl
+                    (\_ moduleNames soFar ->
+                        moduleNames
+                            |> Array.foldl
+                                (\moduleName withModuleNamesSoFar ->
+                                    withModuleNamesSoFar
+                                        |> Set.set (moduleName |> Compiler.ModuleName.toString)
+                                )
+                                soFar
+                    )
+                    Set.empty
+
+
+{-| Collect all exposed members from the file
+
+  - `simpleNames`: values, functions, type alias, opaque types (those without `(..)`), infix operators (parenthesized)
+
+  - `typesWithVariantNames`: names of types that expose their variants with `(..)`
+    paired with what variant names are actually meant by `..`.
+
+-}
+moduleExposes :
+    Compiler.Ast.Source.Module
+    ->
+        { simpleNames : Set String
+        , typesWithVariantNames : Dict String (Set String)
+        }
+moduleExposes syntaxFile =
+    let
+        moduleTypesWithVariantNames : Dict String (Set String)
+        moduleTypesWithVariantNames =
+            syntaxFile.unions
+                |> Array.foldl
+                    (\choiceTypeDeclaration soFar ->
+                        soFar
+                            |> Dict.set choiceTypeDeclaration.value.value.name.value
+                                (choiceTypeDeclaration.value.value.variants
+                                    |> SetLocalExtra.fromListMap
+                                        (\variant -> variant.value.name.value)
+                                )
+                    )
+                    Dict.empty
+    in
+    when syntaxFile.exports is
+        Compiler.Ast.Source.Explicit topLevelExposeList ->
+            let
+                visibleExposes : { simpleNames : Set String, typesExposingVariants : Set String }
+                visibleExposes =
+                    topLevelExposeList |> exposedArrayToExposes
+            in
+            { simpleNames = visibleExposes.simpleNames
+            , typesWithVariantNames =
+                visibleExposes.typesExposingVariants
+                    |> Set.foldl
+                        (\choiceTypeName soFar ->
+                            when moduleTypesWithVariantNames |> Dict.get choiceTypeName is
+                                Nothing ->
+                                    soFar
+
+                                Just variantNames ->
+                                    soFar |> Dict.set choiceTypeName variantNames
+                        )
+                        Dict.empty
+            }
+
+        Compiler.Ast.Source.Open ->
+            { simpleNames =
+                syntaxFile.values
+                    |> Array.foldl
+                        (\valueOrFunctionDeclaration soFar ->
+                            soFar |> Set.set valueOrFunctionDeclaration.value.value.name.value
+                        )
+                        (syntaxFile.aliases
+                            |> Array.foldl
+                                (\typeAliasDeclaration soFar -> soFar |> Set.set typeAliasDeclaration.value.value.name.value)
+                                (syntaxFile.binops
+                                    |> Array.foldl
+                                        (\binop soFar -> soFar |> Set.set binop.value.fn)
+                                        (when syntaxFile.effects is
+                                            Compiler.Ast.Source.NoEffects ->
+                                                Set.empty
+                                                    
+                                            Compiler.Ast.Source.Manager _ ->
+                                                Set.empty
+                                            
+                                            Compiler.Ast.Source.Ports ports ->
+                                                ports
+                                                    |> Array.foldl
+                                                        (\signature soFar -> soFar |> Set.set signature.value.value.name.value)
+                                                        Set.empty
+                                        )
+                                )
+                        )
+            , typesWithVariantNames = moduleTypesWithVariantNames
+            }
+
+
+{-| Collect all exposed members from an explicit exposing list of [visible expose](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/1.0.0/module/Compiler.Ast.Source#Exposed)s
+
+  - `simpleNames`: values, functions, type alias, opaque types (those without `(..)`), infix operators (parenthesized)
+  - `typesWithVariantNames`: names of types that expose their variants with `(..)`
+
+-}
+exposedArrayToExposes :
+    Array Compiler.Ast.Source.Exposed
+    -> { simpleNames : Set String, typesExposingVariants : Set String }
+exposedArrayToExposes topLevelExposeSet =
+    topLevelExposeSet
+        |> Array.foldl
+            (\expose soFar ->
+                when expose is
+                    Compiler.Ast.Source.ExposedUpper choiceTypeExpose ->
+                        when choiceTypeExpose.privacy is
+                            Compiler.Ast.Source.Private ->
+                                { simpleNames = soFar.simpleNames |> Set.set choiceTypeExpose.name.value
+                                , typesExposingVariants = soFar.typesExposingVariants
+                                }
+
+                            Compiler.Ast.Source.Public ->
+                                { typesExposingVariants =
+                                    soFar.typesExposingVariants
+                                        |> Set.set choiceTypeExpose.name.value
+                                , simpleNames = soFar.simpleNames
+                                }
+
+                    Compiler.Ast.Source.ExposedLower valueOrFunctionName ->
+                        { simpleNames =
+                            soFar.simpleNames |> Set.set valueOrFunctionName.value
+                        , typesExposingVariants = soFar.typesExposingVariants
+                        }
+
+                    Compiler.Ast.Source.ExposedOperator symbol ->
+                        { simpleNames =
+                            soFar.simpleNames |> Set.set ("(" ++ symbol.value ++ ")")
+                        , typesExposingVariants = soFar.typesExposingVariants
+                        }
+            )
+            { simpleNames = Set.empty
+            , typesExposingVariants = Set.empty
+            }
+
+
+{-| Either the full qualification of a given variant/value/function/type identifier
+or `Nothing` if defined locally.
+
+Requires a list of local explicit imports, see [`importsToExplicit`](#importsToExplicit)
+
+-}
+determineModuleOrigin :
+    Dict
+        String
+        { alias : Maybe String
+        , exposes : Set String -- includes names of variants
+        }
+    -> ({ qualification : String, name : String } -> Maybe String)
+determineModuleOrigin imports { qualification, name = unqualifiedName } =
+    when imports |> Dict.get qualification is
+        Just _ ->
+            qualification |> Just
+
+        Nothing ->
+            let
+                maybeOriginByAlias : Maybe String
+                maybeOriginByAlias =
+                    imports
+                        |> DictLocalExtra.firstJustMap
+                            (\importModuleName import_ ->
+                                when import_.alias is
+                                    Nothing ->
+                                        Nothing
+
+                                    Just alias ->
+                                        if qualification == alias then
+                                            importModuleName |> Just
+
+                                        else
+                                            Nothing
+                            )
+            in
+            when maybeOriginByAlias is
+                Just aliasOriginModuleName ->
+                    aliasOriginModuleName |> Just
+
+                Nothing ->
+                    when qualification is
+                        "" ->
+                            imports
+                                |> DictLocalExtra.firstJustMap
+                                    (\importModuleName import_ ->
+                                        if import_.exposes |> Set.member unqualifiedName then
+                                            importModuleName |> Just
+
+                                        else
+                                            Nothing
+                                    )
+
+                        _ ->
+                            Nothing
+
+
+{-| Regular gren imports don't tell the whole truth of what names can be used in the module declarations.
+Gren for example [uses some imports implicitly](https://packages.gren-lang.org/package/gren-lang/core/version/latest/overview),
+allows `exposing (..)` and `ChoiceTypeWithVariants(..)`
+and merges imports in a specific manner.
+
+[`importsToExplicit`](#importsToExplicit) now takes the module exposes
+of each module (see [`moduleExposes`](#moduleExposes))
+and a list of imports `exposing (..)` and imports exposing explicit (see [`exposedArrayToExposes`](#exposedArrayToExposes))
+from the current module to give you a dict with all imports and actual exposes and aliases listed.
+
+Can be used to [`determineModuleOrigin`](#determineModuleOrigin).
+
+-}
+importsToExplicit :
+    { moduleExposes :
+        Dict
+            String
+            { typesWithVariantNames : Dict String (Set String)
+            , simpleNames : Set String
+            }
+    , importsExposingAll : Array { moduleName : String, alias : Maybe String }
+    , importsExposingExplicit :
+        Array
+            { moduleName : String
+            , alias : Maybe String
+            , typesExposingVariants : Set String
+            , simpleNames : Set String
+            }
+    }
+    ->
+        Dict
+            String
+            { alias : Maybe String
+            , exposes : Set String -- includes names of variants
+            }
+importsToExplicit info =
+    let
+        explicitImportsExposingAllAndDefaultOnes :
+            Dict
+                String
+                { alias : Maybe String
+                , exposes : Set String -- includes names of variants
+                }
+        explicitImportsExposingAllAndDefaultOnes =
+            info.importsExposingAll
+                |> Array.foldl
+                    (\import_ importsSoFar ->
+                        importsSoFar
+                            |> mergeInImport
+                                { moduleName = import_.moduleName
+                                , alias = import_.alias
+                                , exposes =
+                                    when info |> .moduleExposes |> Dict.get import_.moduleName is
+                                        Just actualExposes ->
+                                            Set.union actualExposes.simpleNames
+                                                (actualExposes.typesWithVariantNames
+                                                    |> Dict.foldl
+                                                        (\typeName variantNames soFar ->
+                                                            Set.union variantNames
+                                                                (soFar |> Set.set typeName)
+                                                        )
+                                                        Set.empty
+                                                )
+
+                                        Nothing ->
+                                            Set.empty
+                                }
+                    )
+                    implicitImports
+    in
+    info.importsExposingExplicit
+        |> Array.foldl
+            (\import_ importsSoFar ->
+                importsSoFar
+                    |> mergeInImport
+                        { moduleName = import_.moduleName
+                        , alias = import_.alias
+                        , exposes =
+                            when info |> .moduleExposes |> Dict.get import_.moduleName is
+                                Just moduleExposeInfo ->
+                                    Set.union
+                                        import_.simpleNames
+                                        (import_.typesExposingVariants
+                                            |> Set.foldl
+                                                (\typeExpose soFar ->
+                                                    Set.union
+                                                        (moduleExposeInfo
+                                                            |> .typesWithVariantNames
+                                                            |> Dict.get typeExpose
+                                                            |> Maybe.withDefault Set.empty
+                                                        )
+                                                        soFar
+                                                        |> Set.set typeExpose
+                                                )
+                                                Set.empty
+                                        )
+
+                                Nothing ->
+                                    Set.empty
+                        }
+            )
+            explicitImportsExposingAllAndDefaultOnes
+
+
+{-| From the [`gren-lang/core` readme](https://packages.gren-lang.org/package/gren-lang/core/version/latest/overview):
+
+The modules in this package are so common, that some of them are imported by default in all Gren files. So it is as if every Gren file starts with these imports:
+
+    import Basics exposing (..)
+    import Array exposing (Array)
+    import Maybe exposing (Maybe(..))
+    import Result exposing (Result(..))
+    import String exposing (String)
+    import Char exposing (Char)
+    
+    import Debug
+    
+    import Platform exposing (Program)
+    import Platform.Cmd as Cmd exposing (Cmd)
+    import Platform.Sub as Sub exposing (Sub)
+
+-}
+implicitImports :
+    Dict
+        String
+        { alias : Maybe String
+        , exposes : Set String -- includes names of variants
+        }
+implicitImports =
+    -- TODO update
+    Dict.singleton   "Basics"  
+        { alias = Nothing
+        , exposes =
+            [ "Int"
+            , "Float"
+            , "(+)"
+            , "(-)"
+            , "(*)"
+            , "(/)"
+            , "(//)"
+            , "(^)"
+            , "toFloat"
+            , "round"
+            , "floor"
+            , "ceiling"
+            , "truncate"
+            , "(==)"
+            , "(/=)"
+            , "(<)"
+            , "(>)"
+            , "(<=)"
+            , "(>=)"
+            , "max"
+            , "min"
+            , "compare"
+            , "Order"
+            , "LT"
+            , "EQ"
+            , "GT"
+            , "Bool"
+            , "True"
+            , "False"
+            , "not"
+            , "(&&)"
+            , "(||)"
+            , "xor"
+            , "(++)"
+            , "modBy"
+            , "remainderBy"
+            , "negate"
+            , "abs"
+            , "clamp"
+            , "sqrt"
+            , "logBase"
+            , "e"
+            , "pi"
+            , "cos"
+            , "sin"
+            , "tan"
+            , "acos"
+            , "asin"
+            , "atan"
+            , "atan2"
+            , "degrees"
+            , "radians"
+            , "turns"
+            , "toPolar"
+            , "fromPolar"
+            , "isNaN"
+            , "isInfinite"
+            , "identity"
+            , "always"
+            , "(<|)"
+            , "(|>)"
+            , "(<<)"
+            , "(>>)"
+            , "Never"
+            , "never"
+            ]
+                |> SetLocalExtra.fromList
+        }
+    |> Dict.set "Array" { alias = Nothing, exposes = SetLocalExtra.fromList [ "(::)", "Array" ] }
+    |> Dict.set "Maybe" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Maybe", "Just", "Nothing" ] }
+    |> Dict.set "Result" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Result", "Ok", "Err" ] }
+    |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
+    |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
+    |> Dict.set "Tuple" { alias = Nothing, exposes = Set.empty }
+    |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
+    |> Dict.set "Platform" { alias = Nothing, exposes = Set.singleton "Program" }
+    |> Dict.set "Platform.Cmd" { alias = Just "Cmd", exposes = Set.singleton "Cmd" }
+    |> Dict.set "Platform.Sub" { alias = Just "Sub", exposes = Set.singleton "Sub" }
+
+
+mergeInImport :
+    { moduleName : String
+    , alias : Maybe String
+    , exposes : Set String
+    }
+    ->
+        (Dict
+            String
+            { alias : Maybe String
+            , exposes : Set String -- includes names of variants
+            }
+         ->
+            Dict
+                String
+                { alias : Maybe String
+                , exposes : Set String -- includes names of variants
+                }
+        )
+mergeInImport importInfoToAdd imports =
+    Dict.update importInfoToAdd.moduleName
+        (\existingImport ->
+            let
+                newImportInfo : { alias : Maybe String, exposes : Set String }
+                newImportInfo =
+                    when existingImport is
+                        Nothing ->
+                            { alias = importInfoToAdd.alias
+                            , exposes = importInfoToAdd.exposes
+                            }
+
+                        Just import_ ->
+                            { alias =
+                                when import_.alias is
+                                    Just alias ->
+                                        alias |> Just
+
+                                    Nothing ->
+                                        importInfoToAdd.alias
+                            , exposes = Set.union import_.exposes importInfoToAdd.exposes
+                            }
+            in
+            Just newImportInfo
+        )
+        imports
+
+
+{-| A single edit to be applied to a file's source
+in order to fix a [check error](#Error)
+-}
+type SourceEdit
+    = SourceRangeReplacement { region : SourcePosition.Region, replacement : String }
+
+
+{-| Remove the section in between a given region
+-}
+removeRegion : SourcePosition.Region -> SourceEdit
+removeRegion rangeToRemove =
+    replaceRegion rangeToRemove ""
+
+
+{-| Replace the section in between a given range by something
+-}
+replaceRegion : SourcePosition.Region -> String -> SourceEdit
+replaceRegion range replacement =
+    SourceRangeReplacement { region = range, replacement = replacement }
+
+
+{-| Insert something at the given position
+-}
+insertAt : SourcePosition.Position -> String -> SourceEdit
+insertAt location toInsert =
+    replaceRegion { start = location, end = location } toInsert
+
+
+{-| An undesired situation when trying to apply [`SourceEdit`](#SourceEdit)s
+-}
+type SourceEditError
+    = AfterFixIsUnchanged
+    | FixHasCollisionsInRanges
+
+
+fixRange : SourceEdit -> SourcePosition.Region
+fixRange fix =
+    when fix is
+        SourceRangeReplacement replace ->
+            replace.region
+
+
+{-| Try to apply a set of [`SourceEdit`](#SourceEdit)es to the relevant file source,
+potentially failing with a [`SourceEditError`](#SourceEditError)
+-}
+sourceApplyEdits : Array SourceEdit -> String -> Result SourceEditError String
+sourceApplyEdits fixes sourceCode =
+    if fixes |> sourceEditsContainRangeCollisions then
+        Err FixHasCollisionsInRanges
+
+    else
+        let
+            resultAfterFix : String
+            resultAfterFix =
+                fixes
+                    |> Array.sortWith
+                        (\a b ->
+                            -- flipped order
+                            sourcePositionCompare (b |> fixRange |> .start) (a |> fixRange |> .start)
+                        )
+                    |> Array.foldl applyFixSingle (sourceCode |> String.lines)
+                    |> String.join "\n"
+        in
+        if sourceCode == resultAfterFix then
+            Err AfterFixIsUnchanged
+
+        else
+            Ok resultAfterFix
+
+sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare a b =
+    when Basics.compare a.col b.col is
+        LT -> LT
+        GT -> GT
+        EQ ->
+            Basics.compare a.row b.row
+
+
+applyFixSingle : SourceEdit -> (Array String -> Array String)
+applyFixSingle fixToApply lines =
+    when fixToApply is
+        SourceRangeReplacement replace ->
+            let
+                linesBefore : Array String
+                linesBefore =
+                    lines |> Array.takeFirst (replace.region.start.row - 1)
+
+                linesAfter : Array String
+                linesAfter =
+                    lines |> Array.dropFirst replace.region.end.row
+
+                startLine : String
+                startLine =
+                    lines
+                        |> Array.get (replace.region.start.row - 1)
+                        |> Maybe.withDefault ""
+                        |> Unicode.takeFirst (replace.region.start.col - 1)
+
+                endLine : String
+                endLine =
+                    lines
+                        |> Array.get (replace.region.end.row - 1)
+                        |> Maybe.withDefault ""
+                        |> Unicode.dropFirst (replace.region.end.col - 1)
+            in
+            linesBefore
+                ++ (replace.replacement
+                        |> String.lines
+                        |> Array.update 0 (\replacementFirstLine -> startLine ++ replacementFirstLine)
+                        |> ArrayLocalExtra.lastMap (\replacementLastLine -> replacementLastLine ++ endLine)
+                   )
+                ++ linesAfter
+
+
+sourceEditsContainRangeCollisions : Array SourceEdit -> Bool
+sourceEditsContainRangeCollisions fixes =
+    fixes
+        |> ArrayLocalExtra.anyPair
+            (\edit0 edit1 ->
+                rangesCollide (edit0 |> fixRange) (edit1 |> fixRange)
+            )
+
+
+rangesCollide : SourcePosition.Region -> SourcePosition.Region -> Bool
+rangesCollide a b =
+    when sourcePositionCompare a.end b.start is
+        LT ->
+            False
+
+        EQ ->
+            False
+
+        GT ->
+            when sourcePositionCompare b.end a.start is
+                LT ->
+                    False
+
+                EQ ->
+                    False
+
+                GT ->
+                    True
+
+
+
+-- test
+
+
+{-| The default project after `gren init --platform=common` (no browser/node dependencies).
+Equivalent to (copy and adapt if necessary)
+
+    { grenJson =
+        """
+        {
+            "type": "application",
+            "platform": "common",
+            "source-directories": [
+                "src"
+            ],
+            "gren-version": "0.6.3",
+            "dependencies": {
+                "direct": {
+                    "gren-lang/core": "7.4.0"
+                },
+                "indirect": {}
+            }
+        }
+        """
+    , directDependencies = []
+    }
+
+(the most common gren-lang/core modules are automatically part of every tested project)
+
+-}
+applicationConfigurationMinimal : { grenJson : String, directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } } }
+applicationConfigurationMinimal =
+    { grenJson =
+        """
+        {
+            "type": "application",
+            "platform": "common",
+            "source-directories": [
+                "src"
+            ],
+            "gren-version": "0.6.3",
+            "dependencies": {
+                "direct": {
+                    "gren-lang/core": "7.4.0"
+                },
+                "indirect": {}
+            }
+        }
+        """
+    , directDependencies = []
+    }
+
+
+{-| The result of running a check on a project
+-}
+type alias CheckResult =
+    Result
+        (Array String)
+        (Array
+            { path : String
+            , source : String
+            , errors : Array FileCheckError
+            }
+        )
+
+
+type alias SuccessfulRunResult =
+    { path : String
+    , source : String
+    , errors : Array FileCheckError
+    }
+
+
+{-| An expectation that an error with this shape will be reported.
+-}
+type alias ExpectedFileError =
+    { message : String
+    , details : Array String
+    , region : ExpectedErrorRange
+    , fixedFiles : Array { path : String, source : String }
+    }
+
+
+{-| An expectation for the reported error range.
+If the section to mark is unique in the source, use `Under "your section source"`.
+If the section occurs multiple times in the source, use `UnderExactly { section = "your section source", startingAt = { row = ..., col = ... } }`
+-}
+type ExpectedErrorRange
+    = ExpectUnder String
+    | ExpectUnderExactly { section : String, startingAt : SourcePosition.Position }
+
+
+expectationsViolated : Array String -> Expect.Expectation
+expectationsViolated errors =
+    if errors |> Array.isEmpty then
+        Expect.pass
+
+    else
+        Expect.fail (errors |> String.join "\n\n\n\n")
+
+
+{-| Run a `ExtraCheck` on a project, matching all reported module errors, `gren.json` errors and extra file errors
+with your provided expected errors.
+
+    import DebugForbid
+    import ExtraCheck
+    import Test
+
+    tests : Test.Test
+    tests =
+        Test.describe "DebugForbid"
+            [ Test.test "report Debug.log use"
+                (\{} ->
+                    ExtraCheck.test
+                        { files =
+                            [ { path = "src/A.gren"
+                              , source =
+                                    """
+                                    module A exposing (a)
+                                    import Html
+                                    a =
+                                        Debug.log "some" "message"
+                                    """
+                              }
+                            ]
+                        , projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                        , check = DebugForbid.check
+                        , expectedErrors =
+                            [ { path = "src/A.gren"
+                              , message = "Remove the use of `Debug` before shipping to production"
+                              , details = [ "Compiling gren code in optimized mode does not allow these helpers." ]
+                              , region = ExtraCheck.ExpectUnder "Debug.log"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (a)
+                                            a =
+                                                "message"
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                        }
+                )
+            ]
+
+The extra indentation specified by the first line will be stripped of all the provided source strings.
+
+You can also specify a custom project config for when you want to test a package, use a custom gren.json
+or add dependencies by supplying the raw sources for the `gren.json` and the direct dependency modules
+(the most common gren-lang/core modules are automatically part of every tested project).
+
+-}
+test :
+    { files : Array { path : String, source : String }
+    , projectConfiguration :
+        { grenJson : String, directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } } }
+    , check : Check
+    , expectedErrors :
+        Array
+            { path : String
+            , message : String
+            , details : Array String
+            , region : ExpectedErrorRange
+            , fixedFiles : Array { path : String, source : String }
+            }
+    }
+    -> Expect.Expectation
+test config =
+    when config.projectConfiguration.grenJson |> Json.Decode.decodeString Compiler.Outline.jsonDecoder is
+        Err grenJsonParseError ->
+            [ grenJsonParseError |> grenJsonParsingFailure ] |> expectationsViolated
+
+        Ok outline ->
+            let
+                expectedErrorsByPath : Array { path : String, errors : Array ExpectedFileError }
+                expectedErrorsByPath =
+                    config.expectedErrors
+                        |> Array.foldl
+                            (\error soFar ->
+                                soFar
+                                    |> Dict.update error.path
+                                        (\errorsAtPathSoFar ->
+                                            errorsAtPathSoFar
+                                                |> Maybe.withDefault (Array.Builder.empty 1)
+                                                |> Array.Builder.pushLast
+                                                    { message = error.message
+                                                    , details = error.details
+                                                    , region = error.region
+                                                    , fixedFiles = error.fixedFiles
+                                                    }
+                                                |> Just
+                                        )
+                            )
+                            Dict.empty
+                        |> DictLocalExtra.toArrayMap
+                            (\path errors ->
+                                { path = path, errors = errors |> Array.Builder.toArray }
+                            )
+                
+                invalidExpectedErrors =
+                    expectedErrorsByPath |> invalidExpectedErrorsIn { files = config.files, outline = outline }
+            in
+            if invalidExpectedErrors |> Array.isEmpty then
+                let
+                    sourceByPath : Dict String String
+                    sourceByPath =
+                        config.files
+                            |> DictLocalExtra.fromArrayMap
+                                (\file -> { key = file.path, value = file.source })
+                in
+                toCheckResult config.check
+                    { files = config.files
+                    , directDependencies =
+                        -- possible optimization: do not reparse for each test
+                        config.projectConfiguration.directDependencies
+                            |> Array.pushLast
+                                { grenJson = GrenCoreDependency.grenJson, modules = GrenCoreDependency.modulePathsAndSources }
+                    , grenJson = { source = config.projectConfiguration.grenJson, outline = outline }
+                    }
+                    |> expectErrors sourceByPath expectedErrorsByPath
+
+            else
+                invalidExpectedErrors |> expectationsViolated
+
+
+compilerOutlineSourceDirectories : Compiler.Outline.Outline -> Array String
+compilerOutlineSourceDirectories grenJson =
+    when grenJson is
+        Compiler.Outline.App application ->
+            application.sourceDirectories
+                |> Array.map FileSystem.Path.toPosixString
+
+        Compiler.Outline.Pkg _ ->
+            [ "src" ]
+
+
+toCheckResult :
+    Check
+    ->
+        { files : Array { path : String, source : String }
+        , grenJson : { source : String, outline : Compiler.Outline.Outline }
+        , directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } }
+        }
+    -> CheckResult
+toCheckResult check project =
+    let
+        sourceDirectories : Array String
+        sourceDirectories =
+            project.grenJson.outline |> compilerOutlineSourceDirectories
+
+        pathIsModule : String -> Bool
+        pathIsModule path =
+            (path |> String.endsWith ".gren")
+                && (sourceDirectories |> Array.any (\dir -> path |> String.startsWith dir))
+
+        { trues = moduleFiles, falses = extraFiles } =
+            project.files
+                |> Array.partition
+                    (\file -> file.path |> pathIsModule)
+
+        moduleParseResults :
+            Result
+                (Array.Builder.Builder String)
+                (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+        moduleParseResults =
+            moduleFiles |> parseModules
+    in
+    when moduleParseResults is
+        Err modulesThatFailedToParse ->
+            Err (modulesThatFailedToParse |> Array.Builder.toArray)
+
+        Ok modulesParsedBuilder ->
+            let
+                modulesParsed =
+                    modulesParsedBuilder |> Array.Builder.toArray
+                
+                directDependenciesParsed : Array { parsed : Maybe { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }, errors : Array String }
+                directDependenciesParsed =
+                    project.directDependencies
+                        |> Array.map
+                            (\directDependency ->
+                                let
+                                    outlineResult : Result Json.Decode.Error Compiler.Outline.PkgOutline
+                                    outlineResult =
+                                        directDependency.grenJson |> Json.Decode.decodeString Compiler.Outline.pkgJsonDecoder
+
+                                    dependencyModulesResult :
+                                        Result
+                                            (Array.Builder.Builder String)
+                                            (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+                                    dependencyModulesResult =
+                                        directDependency.modules |> parseModules
+                                in
+                                when outlineResult is
+                                    Ok outline ->
+                                        when dependencyModulesResult is
+                                            Ok dependencyModulesParsed ->
+                                                { parsed = Just { outline = outline, modules = dependencyModulesParsed |> Array.Builder.toArray }
+                                                , errors = []
+                                                }
+
+                                            Err parseErrors ->
+                                                { parsed = Nothing
+                                                , errors = parseErrors |> Array.Builder.toArray
+                                                }
+
+                                    Err grenJsonParseError ->
+                                        when dependencyModulesResult is
+                                            Ok _ ->
+                                                { parsed = Nothing
+                                                , errors = [ dependencyGrenJsonParsingFailure grenJsonParseError ]
+                                                }
+
+                                            Err parseErrors ->
+                                                { parsed = Nothing
+                                                , errors =
+                                                    parseErrors
+                                                        |> Array.Builder.pushLast
+                                                            (dependencyGrenJsonParsingFailure grenJsonParseError)
+                                                        |> Array.Builder.toArray
+                                                }
+                            )
+                
+                directDependenciesParseErrors =
+                    directDependenciesParsed |> Array.mapAndFlatten .errors
+            in
+            if Basics.not (Array.isEmpty directDependenciesParseErrors) then
+                Err directDependenciesParseErrors
+
+            else
+                let
+                    runErrorsByPath : Dict String (Array FileCheckError)
+                    runErrorsByPath =
+                        { grenJson = project.grenJson
+                        , directDependencies =
+                            directDependenciesParsed
+                                |> Array.mapAndKeepJust .parsed
+                        , addedOrChangedExtraFiles = extraFiles
+                        , addedOrChangedModules = modulesParsed
+                        , removedExtraFilePaths = []
+                        , removedModulePaths = []
+                        }
+                            |> run check
+                            |> .errorsByPath
+
+                    fileErrors : Array SuccessfulRunResult
+                    fileErrors =
+                        (modulesParsed
+                            |> Array.map
+                                (\module_ ->
+                                    { path = module_.path
+                                    , source = module_.source
+                                    , errors =
+                                        runErrorsByPath
+                                            |> Dict.get module_.path
+                                            |> Maybe.withDefault []
+                                    }
+                                )
+                        )
+                            ++ (when runErrorsByPath |> Dict.get "gren.json" is
+                                    Just errorsForElmJson ->
+                                        [ { path = "gren.json"
+                                            , source = project.grenJson.source
+                                            , errors = errorsForElmJson
+                                            }
+                                        ]
+
+                                    Nothing ->
+                                        []
+                                )
+                            ++ (extraFiles
+                                    |> Array.mapAndKeepJust
+                                        (\extraFile ->
+                                            runErrorsByPath
+                                                |> Dict.get extraFile.path
+                                                |> Maybe.map
+                                                    (\errorsForExtraFile ->
+                                                        { path = extraFile.path
+                                                        , source = extraFile.source
+                                                        , errors = errorsForExtraFile
+                                                        }
+                                                    )
+                                        )
+                                )
+                in
+                fileErrors |> Ok
+
+
+parseModules :
+    Array { path : String, source : String }
+    ->
+        Result
+            (Array.Builder.Builder String)
+            (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+parseModules moduleFiles =
+    moduleFiles
+        |> Array.foldl
+            (\moduleUnparsed soFar ->
+                when moduleUnparsed.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                    Err _ ->
+                        Err
+                            (Array.Builder.pushLast
+                                (moduleFailedToParse { path = moduleUnparsed.path })
+                                (when soFar is
+                                    Ok _ ->
+                                        Array.Builder.empty 1
+
+                                    Err failedToParseSoFar ->
+                                        failedToParseSoFar
+                                )
+                            )
+
+                    Ok syntax ->
+                        when soFar is
+                            Ok parsedSoFar ->
+                                Ok
+                                    (parsedSoFar
+                                        |> Array.Builder.pushLast
+                                            { path = moduleUnparsed.path
+                                            , source = moduleUnparsed.source
+                                            , syntax = syntax
+                                            }
+                                    )
+
+                            (Err _) as failedToParseSoFar ->
+                                failedToParseSoFar
+            )
+            (Ok (Array.Builder.empty 2))
+
+
+moduleFailedToParse : { path : String } -> String
+moduleFailedToParse file =
+    failureMessage "module failed to parse"
+        ("I could not parse the provided gren module source code at path "
+            ++ file.path
+            ++ ".\n\n"
+            ++ "Hint: Maybe you forgot to add the module definition at the top, like module A exposing (a)"
+        )
+
+
+dependencyGrenJsonParsingFailure : Json.Decode.Error -> String
+dependencyGrenJsonParsingFailure jsonDecodeError =
+    failureMessage "dependency gren.json failed to parse"
+        ("I could not parse a provided dependency gren.json source: "
+            ++ (jsonDecodeError |> Json.Decode.errorToString)
+            ++ "\n\n"
+            ++ "Hint: Maybe you copy pasted the wrong file?"
+        )
+
+
+dependencyDocsJsonParsingFailure : Json.Decode.Error -> String
+dependencyDocsJsonParsingFailure jsonDecodeError =
+    failureMessage "dependency docs.json failed to parse"
+        ("I could not parse a provided dependency docs.json source: "
+            ++ (jsonDecodeError |> Json.Decode.errorToString)
+            ++ "\n\n"
+            ++ "Hint: Maybe you copy pasted the wrong file?"
+        )
+
+
+invalidExpectedErrorsIn :
+    { files : Array { path : String, source : String }
+    , outline : Compiler.Outline.Outline
+    }
+    -> (Array { path : String, errors : Array ExpectedFileError } -> Array String)
+invalidExpectedErrorsIn project expectedErrors =
+    let
+        sourceDirectories : Array String
+        sourceDirectories =
+            project.outline |> compilerOutlineSourceDirectories
+
+        projectPathsExceptElmJson : Set String
+        projectPathsExceptElmJson =
+            project.files |> SetLocalExtra.fromListMap .path
+
+        pathIsModule : String -> Bool
+        pathIsModule path =
+            (path |> String.endsWith ".gren")
+                && (sourceDirectories |> Array.any (\dir -> path |> String.startsWith dir))
+
+        modulePaths : Set String
+        modulePaths =
+            projectPathsExceptElmJson |> Set.keepIf pathIsModule
+
+        projectPaths : Set String
+        projectPaths =
+            projectPathsExceptElmJson |> Set.set "gren.json"
+    in
+    (expectedErrors
+        |> Array.mapAndKeepJust
+            (\expectedErrorsAtPath ->
+                if projectPaths |> Set.member expectedErrorsAtPath.path then
+                    Nothing
+
+                else
+                    unknownFilesInExpectedErrors expectedErrorsAtPath.path
+                        |> Just
+            )
+    )
+        ++ (expectedErrors
+                |> Array.mapAndFlatten
+                    (\expectedFileErrors ->
+                        when expectedFileErrors.path is
+                            "gren.json" ->
+                                expectedFileErrors.errors
+
+                            _ ->
+                                []
+                    )
+                |> Array.mapAndFlatten
+                    (\expectedError ->
+                        expectedError.fixedFiles
+                            |> Array.mapAndKeepJust
+                                (\fixedFile ->
+                                    when fixedFile.source |> Json.Decode.decodeString Compiler.Outline.jsonDecoder is
+                                        Ok _ ->
+                                            Nothing
+
+                                        Err jsonDecodeError ->
+                                            grenJsonFixedSourceParsingFailure
+                                                jsonDecodeError
+                                                { message = expectedError.message, details = expectedError.details }
+                                                |> Just
+                                )
+                    )
+           )
+        ++ (expectedErrors
+                |> Array.mapAndFlatten
+                    (\expectedFileErrors ->
+                        if modulePaths |> Set.member expectedFileErrors.path then
+                            expectedFileErrors.errors
+                                |> Array.mapAndFlatten
+                                    (\expectedError ->
+                                        expectedError.fixedFiles
+                                            |> Array.mapAndKeepJust
+                                                (\fixedFile ->
+                                                    when fixedFile.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                                                        Ok _ ->
+                                                            Nothing
+
+                                                        Err _ ->
+                                                            moduleFixedSourceParsingFailure
+                                                                { path = expectedFileErrors.path
+                                                                , errorInfo =
+                                                                    { message = expectedError.message
+                                                                    , details = expectedError.details
+                                                                    }
+                                                                }
+                                                                |> Just
+                                                )
+                                    )
+
+                        else
+                            []
+                    )
+           )
+
+
+grenJsonFixedSourceParsingFailure : Json.Decode.Error -> { message : String, details : Array String } -> String
+grenJsonFixedSourceParsingFailure decodeError errorInfo =
+    failureMessage "expected fixed gren.json failed to parse"
+        ("I could not decode the expected fixed gren.json for the error with the message\n\n  \""
+            ++ errorInfo.message
+            ++ "\"\n\nbecause "
+            ++ (decodeError |> Json.Decode.errorToString)
+        )
+
+
+moduleFixedSourceParsingFailure : { path : String, errorInfo : { message : String, details : Array String } } -> String
+moduleFixedSourceParsingFailure info =
+    failureMessage "expected fixed module failed to parse"
+        ("I could not parse the provided expected fixed gren module source code at path "
+            ++ info.path
+            ++ " for the error with the message\n\n  "
+            ++ info.errorInfo.message
+            ++ "\n\nHint: Maybe you forgot to add the module definition at the top, like module A exposing (a)?"
+        )
+
+
+unknownFilesInExpectedErrors : String -> String
+unknownFilesInExpectedErrors path =
+    failureMessage "expected errors use unknown path"
+        ("I expected errors for the file at path "
+            ++ path
+            ++ " but I couldn't find an entry with its source in the test files field with that path."
+        )
+
+
+expectErrors : Dict String String -> Array { path : String, errors : Array ExpectedFileError } -> (CheckResult -> Expect.Expectation)
+expectErrors sourceByPath expectationsList reviewResult =
+    when reviewResult is
+        Err errors ->
+            expectationsViolated errors
+
+        Ok runResults ->
+            let
+                expectations : Dict String (Array ExpectedFileError)
+                expectations =
+                    expectationsList
+                        |> Array.foldl
+                            (\fileExpectation soFar ->
+                                if fileExpectation.errors |> Array.isEmpty then
+                                    soFar
+                                
+                                else
+                                    soFar |> Dict.set fileExpectation.path fileExpectation.errors
+                            )
+                            Dict.empty
+            in
+            Expect.all
+                (runResults
+                    |> Array.map
+                        (\runResult {} ->
+                            checkAllErrorsMatch
+                                { sourceByPath = sourceByPath
+                                , runResult = runResult
+                                , unorderedExpectedErrors =
+                                    expectations
+                                        |> Dict.get runResult.path
+                                        |> Maybe.withDefault []
+                                }
+                        )
+                )
+                {}
+
+
+checkAllErrorsMatch :
+    { sourceByPath : Dict String String
+    , runResult : SuccessfulRunResult
+    , unorderedExpectedErrors : Array ExpectedFileError
+    }
+    -> Expect.Expectation
+checkAllErrorsMatch toCheck =
+    let
+        errorsOrdered : { expected : Array ExpectedFileError, reviewErrors : Array FileCheckError }
+        errorsOrdered =
+            reorderErrors
+                { source = toCheck.runResult.source
+                , expectedErrors = toCheck.unorderedExpectedErrors
+                , reviewErrors = toCheck.runResult.errors
+                , pairs = Array.Builder.empty 0
+                , expectedErrorsWithNoMatch = Array.Builder.empty 0
+                }
+    in
+    expectErrorsMatch
+        { sourceByPath = toCheck.sourceByPath
+        , runResult = toCheck.runResult
+        , expected = errorsOrdered.expected
+        , reviewErrors = errorsOrdered.reviewErrors
+        }
+
+
+reorderErrors :
+    { source : String
+    , expectedErrors : Array ExpectedFileError
+    , reviewErrors : Array FileCheckError
+    , pairs : Array.Builder.Builder { expected : ExpectedFileError, reviewError : FileCheckError }
+    , expectedErrorsWithNoMatch : Array.Builder.Builder ExpectedFileError
+    }
+    -> { expected : Array ExpectedFileError
+       , reviewErrors : Array FileCheckError
+       }
+reorderErrors reorderState =
+    -- TODO optimize
+    when reorderState.expectedErrors |> Array.popFirst is
+        Nothing ->
+            { expected =
+                Array.Builder.append
+                    (reorderState.pairs |> Array.Builder.toArray |> Array.map .expected)
+                    reorderState.expectedErrorsWithNoMatch
+                    |> Array.Builder.toArray
+            , reviewErrors =
+                Array.append
+                    (reorderState.pairs |> Array.Builder.toArray |> Array.map .reviewError)
+                    reorderState.reviewErrors
+            }
+
+        Just { first = expectedError, rest = restOfExpectedErrors } ->
+            when findBestMatchingCheckError { source = reorderState.source, expected = expectedError, reviewErrorsRemaining = reorderState.reviewErrors, bestMatchError = Nothing, bestMatchConfidenceLevel = 0 } is
+                Just reviewError ->
+                    reorderErrors
+                        { reorderState
+                            | pairs =
+                                Array.Builder.pushLast
+                                    { expected = expectedError, reviewError = reviewError }
+                                    reorderState.pairs
+                            , reviewErrors = arrayRemoveFirstMember reviewError reorderState.reviewErrors
+                            , expectedErrors = restOfExpectedErrors
+                        }
+
+                Nothing ->
+                    reorderErrors
+                        { reorderState
+                            | expectedErrorsWithNoMatch =
+                                reorderState.expectedErrorsWithNoMatch
+                                    |> Array.Builder.pushLast expectedError
+                            , expectedErrors = restOfExpectedErrors
+                        }
+
+
+arrayRemoveFirstMember : a -> (Array a -> Array a)
+arrayRemoveFirstMember elementToRemove list =
+    -- IGNORE TCO
+    -- TODO optimize
+    when list |> Array.popFirst is
+        Nothing ->
+            []
+
+        Just { first, rest = tail } ->
+            if first == elementToRemove then
+                tail
+
+            else
+                Array.pushFirst first (arrayRemoveFirstMember elementToRemove tail)
+
+
+findBestMatchingCheckError : { source : String, expected : ExpectedFileError, reviewErrorsRemaining : Array FileCheckError, bestMatchError : Maybe FileCheckError, bestMatchConfidenceLevel : Int } -> Maybe FileCheckError
+findBestMatchingCheckError matchInfo =
+    when matchInfo.reviewErrorsRemaining |> Array.popLast is
+        Nothing ->
+            matchInfo.bestMatchError
+
+        Just { last = reviewError, initial = restOfCheckErrors } ->
+            let
+                confidenceLevel : Int
+                confidenceLevel =
+                    matchingConfidenceLevel matchInfo.source matchInfo.expected reviewError
+            in
+            if confidenceLevel > matchInfo.bestMatchConfidenceLevel then
+                findBestMatchingCheckError
+                    { source = matchInfo.source
+                    , expected = matchInfo.expected
+                    , reviewErrorsRemaining = restOfCheckErrors
+                    , bestMatchError = Just reviewError
+                    , bestMatchConfidenceLevel = confidenceLevel
+                    }
+
+            else
+                findBestMatchingCheckError
+                    { source = matchInfo.source
+                    , expected = matchInfo.expected
+                    , reviewErrorsRemaining = restOfCheckErrors
+                    , bestMatchError = matchInfo.bestMatchError
+                    , bestMatchConfidenceLevel = matchInfo.bestMatchConfidenceLevel
+                    }
+
+
+matchingConfidenceLevel : String -> ExpectedFileError -> FileCheckError -> Int
+matchingConfidenceLevel source expectedErrorDetails reviewError =
+    if expectedErrorDetails.message /= reviewError.message then
+        0
+
+    else
+        when expectedErrorDetails.region is
+            ExpectUnder under ->
+                if (source |> sourceExtractInRange reviewError.region) /= under then
+                    1
+
+                else
+                    2
+
+            ExpectUnderExactly underExactly ->
+                if (source |> sourceExtractInRange reviewError.region) /= underExactly.section then
+                    1
+
+                else if underExactly.startingAt /= reviewError.region.start then
+                    2
+
+                else
+                    3
+
+
+expectErrorsMatch :
+    { sourceByPath : Dict String String
+    , runResult : SuccessfulRunResult
+    , expected : Array ExpectedFileError
+    , reviewErrors : Array FileCheckError
+    }
+    -> Expect.Expectation
+expectErrorsMatch toCheckForMatchingErrors =
+    -- IGNORE TCO
+    when toCheckForMatchingErrors.expected |> Array.popFirst is
+        Nothing ->
+            if toCheckForMatchingErrors.reviewErrors |> Array.isEmpty then
+                Expect.pass
+
+            else
+                tooManyErrors
+                    toCheckForMatchingErrors.runResult.path
+                    toCheckForMatchingErrors.reviewErrors
+                    |> Expect.fail
+
+        Just { first = expected, rest = restOfExpectedErrors } ->
+            when toCheckForMatchingErrors.reviewErrors |> Array.popFirst is
+                Nothing ->
+                    toCheckForMatchingErrors.expected
+                        |> Array.map expectedErrorForMessage
+                        |> tooFewErrors toCheckForMatchingErrors.runResult.path
+                        |> Expect.fail
+
+                Just { first = reviewError, rest = restOfErrors } ->
+                    Expect.all
+                        [ \{} ->
+                            expectErrorsMatch
+                                { sourceByPath = toCheckForMatchingErrors.sourceByPath
+                                , runResult = toCheckForMatchingErrors.runResult
+                                , expected = restOfExpectedErrors
+                                , reviewErrors = restOfErrors
+                                }
+                        , \{} ->
+                            reviewError.message
+                                |> Expect.equal expected.message
+                                |> Expect.onFail
+                                    (messageMismatch
+                                        (expectedErrorForMessage expected)
+                                        reviewError
+                                    )
+                        , \{} ->
+                            checkMessageAppearsUnder
+                                { source = toCheckForMatchingErrors.runResult.source
+                                , reviewError = reviewError
+                                , expected = expected
+                                }
+                        , \{} -> checkDetailsAreCorrect reviewError expected
+                        , \{} ->
+                            checkFixesAreCorrect
+                                { sourceByPath = toCheckForMatchingErrors.sourceByPath
+                                , reviewError = reviewError
+                                , expected = expected
+                                }
+                        ]
+                        {}
+
+
+expectedErrorForMessage :
+    { error_
+        | message : String
+        , details : Array String
+        , region : ExpectedErrorRange
+    }
+    -> { message : String, details : Array String, under : String }
+expectedErrorForMessage expectedError =
+    { message = expectedError.message
+    , details = expectedError.details
+    , under =
+        when expectedError.region is
+            ExpectUnder section ->
+                section
+
+            ExpectUnderExactly underExactly ->
+                underExactly.section
+    }
+
+
+checkMessageAppearsUnder :
+    { source : String, reviewError : FileCheckError, expected : ExpectedFileError }
+    -> Expect.Expectation
+checkMessageAppearsUnder toCheck =
+    let
+        errorSourceInRange : String
+        errorSourceInRange =
+            toCheck.source |> sourceExtractInRange toCheck.reviewError.region
+    in
+    when toCheck.expected.region is
+        ExpectUnder under ->
+            Expect.all
+                [ \{} ->
+                    errorSourceInRange
+                        |> Expect.equal under
+                        |> Expect.onFail
+                            (underMismatch
+                                toCheck.reviewError
+                                { under = under, errorSourceInRange = errorSourceInRange }
+                            )
+                , \{} ->
+                    when toCheck.source |> String.indices under is
+                        [ _ ] ->
+                            Expect.pass
+
+                        [] ->
+                            Expect.fail
+                                (locationIsMissingInSourceCode
+                                    toCheck.reviewError
+                                    under
+                                )
+
+                        occurrencesInSourceCode ->
+                            Expect.fail
+                                (locationIsAmbiguousInSourceCode toCheck.source
+                                    toCheck.reviewError
+                                    under
+                                    occurrencesInSourceCode
+                                )
+                ]
+                {}
+
+        ExpectUnderExactly underExactly ->
+            Expect.all
+                [ \{} ->
+                    errorSourceInRange
+                        |> Expect.equal underExactly.section
+                        |> Expect.onFail
+                            (underMismatch toCheck.reviewError
+                                { under = underExactly.section, errorSourceInRange = errorSourceInRange }
+                            )
+                , \{} ->
+                    toCheck.reviewError.region.start
+                        |> Expect.equal underExactly.startingAt
+                        |> Expect.onFail
+                            (wrongLocation toCheck.reviewError
+                                { start = underExactly.startingAt
+                                , end =
+                                    { row = underExactly.startingAt.row
+                                    , col = underExactly.startingAt.col + (underExactly.section |> String.unitLength)
+                                    }
+                                }
+                                underExactly.section
+                            )
+                ]
+                {}
+
+
+underMismatch : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> { under : String, errorSourceInRange : String } -> String
+underMismatch error range =
+    failureMessage "error location doesn't match"
+        ("I found an error with the message\n\n  "
+            ++ error.message
+            ++ "\n\nand I was expecting it to be under\n\n  "
+            ++ (range.under |> formatSourceCode)
+            ++ "\n\nbut I found it under\n\n  "
+            ++ (range.errorSourceInRange |> formatSourceCode)
+            ++ "\n\nHint: Maybe you're passing the range of a wrong node to the check error?"
+        )
+
+
+wrongLocation : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> SourcePosition.Region -> String -> String
+wrongLocation error range under =
+    failureMessage "exact error location doesn't match"
+        ("I was looking for the error with the message\n\n  "
+            ++ error.message
+            ++ "\n\nunder the code\n\n  "
+            ++ (under |> formatSourceCode)
+            ++ "\n\nand I found it, but the exact location you specified is not the one I found.\n\nI was expecting the error at\n\n  "
+            ++ (range.start |> locationToCodeString)
+            ++ "\n\nbut I found it at\n\n  "
+            ++ (error.region.start |> locationToCodeString)
+        )
+
+
+locationIsMissingInSourceCode : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String -> String
+locationIsMissingInSourceCode error under =
+    failureMessage "expected error location is missing"
+        ("The exact location where the error appears isn't present in the source code.\n\nYou are looking for the error message\n\n  "
+            ++ error.message
+            ++ "\n\nand expecting to see it under\n\n  "
+            ++ (under |> formatSourceCode)
+            ++ "\n\nI found no locations where that code appeared.\n\nHint: I found the error at\n\n  "
+            ++ (error.region.start |> locationToCodeString)
+            ++ "\n"
+        )
+
+
+locationIsAmbiguousInSourceCode : String -> { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String -> Array Int -> String
+locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
+    failureMessage "expected error location is ambiguous"
+        ("The exact location where the error appears is ambiguous.\n\nYou are looking for the error message\n\n  "
+            ++ error.message
+            ++ "\n\nand expecting to see it under\n\n  "
+            ++ (under |> formatSourceCode)
+            ++ "\n\nI found "
+            ++ (occurrencesInSourceCode |> Array.length |> String.fromInt)
+            ++ " locations where that code appeared. Switch from ExtraCheck.ExpectUnder to ExtraCheck.ExpectUnderExactly to make the range you were targeting unambiguous.\n\nTip: I found them starting at:\n"
+            ++ (occurrencesInSourceCode
+                    |> Array.map
+                        (\occurrence ->
+                            "  - "
+                                ++ (occurrence
+                                        |> startingLocationInSource sourceCode
+                                        |> locationToCodeString
+                                   )
+                        )
+                    |> String.join "\n"
+               )
+        )
+
+
+startingLocationInSource : String -> Int -> SourcePosition.Position
+startingLocationInSource sourceCode position =
+    let
+        linesBeforeAndIncludingPosition : Array String
+        linesBeforeAndIncludingPosition =
+            sourceCode
+                |> String.slice 0 position
+                |> String.lines
+    in
+    { row = linesBeforeAndIncludingPosition |> Array.length
+    , col =
+        (linesBeforeAndIncludingPosition
+            |> Array.last
+            |> Maybe.withDefault ""
+            |> String.unitLength
+        )
+            + 1
+    }
+
+
+checkDetailsAreCorrect : FileCheckError -> ExpectedFileError -> Expect.Expectation
+checkDetailsAreCorrect error expectedError =
+    Expect.all
+        [ \{} ->
+            Array.isEmpty error.details
+                |> Expect.equal False
+                |> Expect.onFail (emptyDetails (.message error))
+        , \{} ->
+            error.details
+                |> Expect.equal expectedError.details
+                |> Expect.onFail (unexpectedDetails expectedError.details error)
+        ]
+        {}
+
+
+unexpectedDetails : Array String -> { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String
+unexpectedDetails expectedDetails error =
+    failureMessage "error details don't match"
+        ("I found an error for a file with the message\n\n  "
+            ++ error.message
+            ++ "\n\nand I was expecting its details to be\n\n  "
+            ++ (expectedDetails |> Array.map (\paragraph -> "  " ++ paragraph) |> String.join "\n\n")
+            ++ "\n\nbut I found the details\n\n  "
+            ++ (error.details |> Array.map (\paragraph -> "  " ++ paragraph) |> String.join "\n\n")
+        )
+
+
+emptyDetails : String -> String
+emptyDetails errorMessage =
+    failureMessage "error details are empty"
+        ("I found an error with the message\n\n  "
+            ++ errorMessage
+            ++ """
+               
+               
+               but its details were empty. Having details will
+               help the user who encounters the problem by for example
+                 - explaining what the problem is
+                 - explaining the reasoning behind the problem
+                 - giving suggestions on how to solve the problem or alternatives
+               """
+        )
+
+
+checkFixesAreCorrect :
+    { sourceByPath : Dict String String
+    , reviewError : FileCheckError
+    , expected : ExpectedFileError
+    }
+    -> Expect.Expectation
+checkFixesAreCorrect toCheck =
+    let
+        expectedFixedSourcedByPath : Dict String String
+        expectedFixedSourcedByPath =
+            toCheck.expected.fixedFiles
+                |> DictLocalExtra.fromArrayMap
+                    (\file -> { key = file.path, value = file.source })
+    in
+    Dict.merge
+        (\path _ soFar -> soFar |> Array.Builder.pushLast (missingSourceEditsForFile path toCheck.expected))
+        (\path expectedFixedSource reviewEdits soFar ->
+            soFar
+                |> ArrayLocalExtra.builderPushLastJust
+                    (checkFileFixesAreCorrect
+                        toCheck.expected
+                        (toCheck.sourceByPath |> Dict.get path |> Maybe.withDefault "")
+                        expectedFixedSource
+                        reviewEdits
+                    )
+        )
+        (\path _ soFar -> soFar |> Array.Builder.pushLast (unexpectedEditsToFile path toCheck.expected))
+        expectedFixedSourcedByPath
+        toCheck.reviewError.fixEditsByPath
+        (Array.Builder.empty 0)
+        |> Array.Builder.toArray
+        |> expectationsViolated
+
+
+checkFileFixesAreCorrect :
+    { expectedError_
+        | region : ExpectedErrorRange
+        , message : String
+        , details : Array String
+    }
+    -> String
+    -> String
+    -> Array SourceEdit
+    -> Maybe String
+checkFileFixesAreCorrect expectedError source expectedFixedSource reviewErrorEdits =
+    when sourceApplyEdits reviewErrorEdits source is
+        Ok fixedSource ->
+            if fixedSource == expectedFixedSource then
+                Nothing
+
+            else if removeWhitespace fixedSource == removeWhitespace expectedFixedSource then
+                Just (fixedSourceWhitespaceMismatch fixedSource expectedFixedSource expectedError)
+
+            else
+                Just (fixedSourceMismatch fixedSource expectedFixedSource expectedError)
+
+        Err AfterFixIsUnchanged ->
+            Just (unchangedSourceAfterFix expectedError)
+
+        Err FixHasCollisionsInRanges ->
+            Just (hasCollisionsInFixRanges expectedError)
+
+
+removeWhitespace : String -> String
+removeWhitespace string =
+    string
+        |> String.keepIf
+            (\char ->
+                when char is
+                    ' ' ->
+                        False
+
+                    '\n' ->
+                        False
+
+                    '\u{000D}' ->
+                        False
+
+                    _ ->
+                        True
+            )
+
+
+fixedSourceMismatch : String -> String -> { error_ | message : String, details : Array String } -> String
+fixedSourceMismatch resultingSource expectedSource error =
+    failureMessage "fixed source doesn't match"
+        ("I found a different fixed source code than expected for the error with the message\n\n"
+            ++ error.message
+            ++ "\n\nafter the fixes have been applied, I expected the source to be\n\n"
+            ++ (expectedSource |> formatSourceCode)
+            ++ "\n\nbut I found the source\n\n"
+            ++ (resultingSource |> formatSourceCode)
+        )
+
+
+fixedSourceWhitespaceMismatch : String -> String -> { error_ | message : String, details : Array String } -> String
+fixedSourceWhitespaceMismatch resultingSource expectedSource error =
+    let
+        { a = expected, b = resulting } =
+            highlightDifferencesInSourceCodes { a = resultingSource, b = expectedSource }
+    in
+    failureMessage "fixed source whitespace doesn't match"
+        ("I found a different fixed source than expected for the error with the message\n\n  "
+            ++ error.message
+            ++ "\n\nThe problem is related to "
+            ++ ("whitespace" |> Ansi.bold |> Ansi.yellow)
+            ++ ".\nafter the fixes have been applied, I expected the source to be\n\n"
+            ++ expected
+            ++ "\n\nbut I found the source\n\n"
+            ++ resulting
+        )
+
+
+highlightDifferencesInSourceCodes : { a : String, b : String } -> { a : String, b : String }
+highlightDifferencesInSourceCodes ab =
+    let
+        res =
+            highlightWhiteSpaceDifferences ab
+    in
+    { a = formatSourceCodeWithFormatter replaceWhitespace (res.a |> String.lines)
+    , b = formatSourceCodeWithFormatter replaceWhitespace (res.b |> String.lines)
+    }
+
+
+highlightWhiteSpaceDifferences : { a : String, b : String } -> { a : String, b : String }
+highlightWhiteSpaceDifferences { a = aString, b = bString } =
+    Diff.diff (aString |> String.toArray) (bString |> String.toArray)
+        |> Array.foldl
+            (\change { a, b } ->
+                when change is
+                    Diff.NoChange str ->
+                        { a = a ++ String.fromChar str, b = b ++ String.fromChar str }
+
+                    Diff.Added '\n' ->
+                        { a = a ++ Ansi.backgroundRed "↵" ++ "\n", b = b }
+
+                    Diff.Added str ->
+                        { a = a ++ Ansi.backgroundRed (String.fromChar str), b = b }
+
+                    Diff.Removed '\n' ->
+                        { a = a, b = b ++ Ansi.backgroundRed "↵" ++ "\n" }
+
+                    Diff.Removed str ->
+                        { a = a, b = b ++ Ansi.backgroundRed (String.fromChar str) }
+            )
+            { a = "", b = "" }
+
+
+replaceWhitespace : Array String -> Array String
+replaceWhitespace lines =
+    lines
+        |> Array.map (String.replace " " (Ansi.cyan "·"))
+        |> String.join (Ansi.cyan "\n")
+        |> String.split "\n"
+
+
+unchangedSourceAfterFix : { error_ | message : String, details : Array String } -> String
+unchangedSourceAfterFix error =
+    failureMessage "applying edits did not change the source"
+        ("After applying the fixes provided by the error with the message\n\n  "
+            ++ error.message
+            ++ """
+               
+               
+               I expected the fix to make some changes to the source, but it resulted
+               in the same source as before the fixes.
+               
+               This is problematic because I will tell the user that this rule provides an
+               automatic fix, but I will have to disappoint them when I later find out it
+               doesn't do anything.
+               """
+        )
+
+
+hasCollisionsInFixRanges : { error_ | message : String, details : Array String } -> String
+hasCollisionsInFixRanges error =
+    failureMessage "source edit ranges collide"
+        ("When applying the fixes provided by the error with the message\n\n  "
+            ++ error.message
+            ++ """
+               
+               
+               I found that some fixes were targeting (partially or completely) the same
+               section of code. The problem with that is that I can't determine which fix
+               to apply first, and the result will be different and potentially invalid
+               based on the order in which I apply these fixes.
+               
+               For this reason, I require that the ranges (for replacing and removing) and
+               the positions (for inserting) of every fix to be mutually exclusive.
+               
+               Hint: Maybe you duplicated a fix, or you targeted the wrong node for one
+               of your fixes.
+               """
+        )
+
+
+missingSourceEditsForFile : String -> { error_ | message : String, details : Array String } -> String
+missingSourceEditsForFile path expectedError =
+    failureMessage "file fix edits are missing"
+        ("The error with the message\n\n  "
+            ++ expectedError.message
+            ++ "\n\ndid not provide edits as a fix for the file at the path "
+            ++ path
+            ++ " which I had expected."
+        )
+
+
+unexpectedEditsToFile : String -> { error_ | message : String, details : Array String } -> String
+unexpectedEditsToFile path error =
+    failureMessage "source edits to file not expected"
+        ("The error with the message\n\n  "
+            ++ error.message
+            ++ "\n\nprovided a fix with source edits for the file at path "
+            ++ path
+            ++ " for which I expected no edits.\n\nTo expect edits, add an entry { path = \""
+            ++ path
+            ++ "\", source = ..your expected changed source.. } to your error's fixedFiles field."
+        )
+
+
+messageMismatch : { expectedError_ | message : String, details : Array String } -> { error_ | message : String, details : Array String } -> String
+messageMismatch expectedError reviewError =
+    failureMessage "error message doesn't match"
+        ("I was looking for the error with the message\n\n  "
+            ++ expectedError.message
+            ++ "\n\nbut I found the error message\n\n  "
+            ++ reviewError.message
+        )
+
+
+tooFewErrors : String -> Array { message : String, details : Array String, under : String } -> String
+tooFewErrors path missingExpectedErrors =
+    failureMessage "missing errors"
+        ("I expected to see more errors for the file at path "
+            ++ path
+            ++ ".\nHere are those I could not find:\n\n"
+            ++ (missingExpectedErrors
+                    |> Array.map (\expectedError -> "  - " ++ expectedError.message)
+                    |> String.join "\n"
+               )
+        )
+
+
+tooManyErrors : String -> Array { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String
+tooManyErrors path extraErrors =
+    failureMessage "unexpected additional errors"
+        ("I found too many errors for the file at path "
+            ++ path
+            ++ ":\n\n"
+            ++ (extraErrors
+                    |> Array.map
+                        (\error ->
+                            "  - " ++ error.message ++ "\n    at " ++ (error.region |> rangeToCodeString)
+                        )
+                    |> String.join "\n"
+               )
+        )
+
+
+rangeToCodeString : SourcePosition.Region -> String
+rangeToCodeString range =
+    "{ start = "
+        ++ (range.start |> locationToCodeString)
+        ++ ", end = "
+        ++ (range.end |> locationToCodeString)
+        ++ " }"
+
+
+grenJsonParsingFailure : Json.Decode.Error -> String
+grenJsonParsingFailure decodeError =
+    failureMessage "gren.json failed to parse"
+        ("I could not decode the provided gren.json because "
+            ++ (decodeError |> Json.Decode.errorToString)
+            ++ "\n\n"
+            ++ "Hint: Try to start with a working gren.json from one of your projects and add dependencies from there"
+        )
+
+
+failureMessage : String -> String -> String
+failureMessage title content =
+    (title |> Ansi.bold |> Ansi.red) ++ "\n\n" ++ content
+
+
+formatSourceCodeWithFormatter : (Array String -> Array String) -> Array String -> String
+formatSourceCodeWithFormatter formatter lines =
+    if Array.length lines == 1 then
+        formatter lines
+            |> String.join "\n"
+
+    else
+        formatter lines
+            |> Array.map
+                (\str ->
+                    when str is
+                        "" ->
+                            ""
+
+                        nonBlankLine ->
+                            "    " ++ nonBlankLine
+                )
+            |> String.join "\n"
+
+
+formatSourceCode : String -> String
+formatSourceCode string =
+    formatSourceCodeWithFormatter identity (string |> String.lines)
+
+
+locationToCodeString : SourcePosition.Position -> String
+locationToCodeString location =
+    "{ row = "
+        ++ (location.row |> String.fromInt)
+        ++ ", col = "
+        ++ (location.col |> String.fromInt)
+        ++ " }"
+
+
+type alias FileCheckError =
+    { region : SourcePosition.Region
+    , message : String
+    , details : Array String
+    , fixEditsByPath : Dict String (Array SourceEdit)
+    }
+
+
+{-| Walk immediate child-expressions, collecting information on the way.
+-}
+expressionImmediateSubsFold :
+    (Compiler.Ast.Source.Expression -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Expression_
+    -> state
+expressionImmediateSubsFold reduce initialState parentExpression =
+    when parentExpression is
+        Compiler.Ast.Source.NumberLiteral _ -> initialState
+        Compiler.Ast.Source.CharLiteral _ -> initialState
+        Compiler.Ast.Source.StringLiteral _ -> initialState
+        Compiler.Ast.Source.Var _ ->
+            initialState
+        Compiler.Ast.Source.VarQual _ ->
+            initialState
+        Compiler.Ast.Source.Accessor _ ->
+            initialState
+        Compiler.Ast.Source.Operator _ ->
+            initialState
+        Compiler.Ast.Source.Parens inParens ->
+            initialState |> reduce inParens
+        Compiler.Ast.Source.Negate inNegation ->
+            initialState |> reduce inNegation
+        Compiler.Ast.Source.Lambda { patterns = _, body = result } ->
+            initialState |> reduce result
+        Compiler.Ast.Source.Access { accessor = _, expression = record } ->
+            initialState |> reduce record
+        Compiler.Ast.Source.ArrayLiteral elements ->
+            elements |> Array.foldl reduce initialState
+        Compiler.Ast.Source.Record fields ->
+            fields
+                |> Array.foldl (\field soFar -> soFar |> reduce field.value)
+                    initialState
+        Compiler.Ast.Source.Update recordUpdate ->
+            recordUpdate.newValues
+                |> Array.foldl (\field soFar -> soFar |> reduce field.value)
+                    (initialState
+                        |> reduce recordUpdate.record
+                    )
+        Compiler.Ast.Source.Binops { left = left, operator = _, right = right } ->
+            initialState |> reduce left |> reduce right
+        Compiler.Ast.Source.If ifThenElse ->
+            ifThenElse.branches
+                |> Array.foldl
+                    (\ifThen soFar ->
+                        soFar
+                            |> reduce ifThen.test
+                            |> reduce ifThen.body
+                    )
+                    initialState
+                |> reduce ifThenElse.elseBranch
+        Compiler.Ast.Source.Call call ->
+            call.args
+                |> Array.foldl reduce
+                    (initialState
+                        |> reduce call.fn
+                    )
+        Compiler.Ast.Source.Let letIn ->
+            letIn.defs
+                |> Array.foldl
+                    (\def soFar ->
+                        soFar
+                            |> reduce
+                                (when def.value is
+                                    Compiler.Ast.Source.Destruct destruct ->
+                                        destruct.body
+                                    Compiler.Ast.Source.Define define ->
+                                        define.body
+                                )
+                    )
+                    initialState
+                |> reduce letIn.body
+        Compiler.Ast.Source.When whenIs ->
+            whenIs.branches
+                |> Array.foldl (\case soFar -> soFar |> reduce case.body)
+                    (initialState
+                        |> reduce whenIs.expression
+                    )
+
+

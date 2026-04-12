@@ -1,0 +1,330 @@
+module Diff exposing (Change(..), diff)
+
+{-| Derived from (edited) <https://github.com/jinjor/elm-diff/>
+
+The following is the original license
+
+---
+
+Copyright (c) 2016-present, Yosuke Torii
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  - Redistributions of source code must retain the above copyright notice, this
+    list of conditions and the following disclaimer.
+
+  - Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+
+  - Neither the name of elm-diff nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+Compares two list and returns how they have changed.
+Each function internally uses Wu's [O(NP) algorithm](http://myerslab.mpi-cbg.de/wp-content/uploads/2014/06/np_diff.pdf).
+
+@docs Change, diff
+
+-}
+
+import Array exposing (Array)
+
+
+{-| How each line has changed plus its value
+-}
+type Change a
+    = Added a
+    | Removed a
+    | NoChange a
+
+
+type StepResult
+    = Continue (Array (Array { a : Int, b : Int }))
+    | Found (Array { a : Int, b : Int })
+
+
+type BugReport
+    = CannotGetA
+    | CannotGetB
+    | UnexpectedPath
+
+
+{-| Compares general lists.
+
+    diff [ 1, 3 ] [ 2, 3 ]
+    --> [ Removed 1, Added 2, NoChange 3 ]
+
+-}
+diff : Array a -> Array a -> Array (Change a)
+diff a b =
+    when testDiff a b is
+        Ok changes->
+            changes
+
+        Err _ ->
+            []
+
+
+{-| Test the algorithm itself.
+If it returns Err, it should be a bug.
+-}
+testDiff : Array a -> Array a -> Result BugReport (Array (Change a))
+testDiff arrA arrB =
+    let
+        -- Elm's Array doesn't allow null element,
+        -- so we'll use shifted index to access source.
+        getA : Int -> Maybe a
+        getA a =
+            Array.get (a - 1) arrA
+
+        getB : Int -> Maybe a
+        getB b =
+            Array.get (b - 1) arrB
+
+        aLength : Int
+        aLength =
+            Array.length arrA
+
+        bLength : Int
+        bLength =
+            Array.length arrB
+    in
+    makeChanges
+        getA
+        getB
+        (onpLoopP (snake getA getB)
+            (bLength - aLength)
+            aLength
+            0
+            (Array.repeat (aLength + bLength + 1) [])
+        )
+
+
+makeChanges :
+    (Int -> Maybe a)
+    -> (Int -> Maybe a)
+    -> Array { a : Int, b : Int }
+    -> Result BugReport (Array (Change a))
+makeChanges getA getB path =
+    -- TODO optimize
+    when path |> Array.popFirst is
+        Nothing ->
+            Ok []
+
+        Just { first = latest, rest = tail } ->
+            makeChangesHelp [] getA getB latest tail
+
+
+makeChangesHelp :
+    Array (Change a)
+    -> (Int -> Maybe a)
+    -> (Int -> Maybe a)
+    -> { a : Int, b : Int }
+    -> Array { a : Int, b : Int }
+    -> Result BugReport (Array (Change a))
+makeChangesHelp changes getA getB ab path =
+    -- TODO optimize
+    when Array.popFirst path is
+        Nothing ->
+            Ok changes
+
+        Just { first = prev, rest = tail } ->
+            if ab.a - 1 == prev.a && ab.b - 1 == prev.b then
+                when getA ab.a is
+                    Just a ->
+                        makeChangesHelp (Array.pushFirst (NoChange a) changes) getA getB prev tail
+
+                    Nothing ->
+                        Err CannotGetA
+
+            else if ab.a == prev.a then
+                when getB ab.b is
+                    Just b ->
+                        makeChangesHelp (Array.pushFirst (Added b) changes) getA getB prev tail
+
+                    Nothing ->
+                        Err CannotGetB
+
+            else if ab.b == prev.b then
+                when getA ab.a is
+                    Just a ->
+                        makeChangesHelp (Array.pushFirst (Removed a) changes) getA getB prev tail
+
+                    Nothing ->
+                        Err CannotGetA
+
+            else
+                Err UnexpectedPath
+
+
+
+-- Myers's O(ND) algorithm (http://www.xmailserver.org/diff2.pdf)
+
+
+snake :
+    (Int -> Maybe a)
+    -> (Int -> Maybe a)
+    -> Int
+    -> Int
+    -> Array { a : Int, b : Int }
+    -> { path : Array { a : Int, b : Int }, done : Bool }
+snake getA getB nextA nextB path =
+    when getA nextA is
+        Just a ->
+            when getB nextB is
+                Nothing ->
+                    { path = path, done = False }
+
+                Just b ->
+                    if a == b then
+                        snake
+                            getA
+                            getB
+                            (nextA + 1)
+                            (nextB + 1)
+                            -- TODO optimize
+                            (Array.pushFirst { a = nextA, b = nextB } path)
+
+                    else
+                        { path = path, done = False }
+
+        Nothing ->
+            when getB nextB is
+                Just _ ->
+                    { path = path, done = False }
+
+                -- reached bottom-right corner
+                Nothing ->
+                    { path = path, done = True }
+
+
+
+-- Wu's O(NP) algorithm (http://myerslab.mpi-cbg.de/wp-content/uploads/2014/06/np_diff.pdf)
+
+
+onpLoopP :
+    (Int
+     -> Int
+     -> Array { a : Int, b : Int }
+     -> { path : Array { a : Int, b : Int }, done : Bool }
+    )
+    -> Int
+    -> Int
+    -> Int
+    -> Array (Array { a : Int, b : Int })
+    -> Array { a : Int, b : Int }
+onpLoopP snake_ delta offset p v =
+    let
+        ks : Array Int
+        ks =
+            if delta > 0 then
+                Array.reverse (Array.range (delta + 1) (delta + p))
+                    ++ Array.range -p delta
+
+            else
+                Array.reverse (Array.range (delta + 1) p)
+                    ++ Array.range (delta - p) delta
+    in
+    when onpLoopK snake_ offset ks v is
+        Found path ->
+            path
+
+        Continue v_ ->
+            onpLoopP snake_ delta offset (p + 1) v_
+
+
+onpLoopK :
+    (Int
+     -> Int
+     -> Array { a : Int, b : Int }
+     -> { path : Array { a : Int, b : Int }, done : Bool }
+    )
+    -> Int
+    -> Array Int
+    -> Array (Array { a : Int, b : Int })
+    -> StepResult
+onpLoopK snake_ offset ks v =   
+    -- TODO optimize
+    when ks |> Array.popFirst is
+        Nothing ->
+            Continue v
+
+        Just { first = k, rest = ks_ } ->
+            when step snake_ offset k v is
+                Found path ->
+                    Found path
+
+                Continue v_ ->
+                    onpLoopK snake_ offset ks_ v_
+
+
+step :
+    (Int
+     -> Int
+     -> Array { a : Int, b : Int }
+     -> { path : Array { a : Int, b : Int }, done : Bool }
+    )
+    -> Int
+    -> Int
+    -> Array (Array { a : Int, b : Int })
+    -> StepResult
+step snake_ offset k v =
+    let
+        fromLeft : Array { a : Int, b : Int }
+        fromLeft =
+            Maybe.withDefault [] (Array.get (k - 1 + offset) v)
+
+        fromTop : Array { a : Int, b : Int }
+        fromTop =
+            Maybe.withDefault [] (Array.get (k + 1 + offset) v)
+
+        { path, ab } =
+            -- TODO optimize
+            when fromLeft |> Array.popFirst is
+                Nothing ->
+                    when fromTop |> Array.popFirst is
+                        Nothing ->
+                            { path = [], ab = { a = 0, b = 0 } }
+
+                        Just { first = top, rest = topTail } ->
+                            { path = Array.pushFirst top topTail, ab = { a = top.a + 1, b = top.b } }
+
+                Just { first = left, rest = leftTail } ->
+                    when fromTop |> Array.popFirst is
+                        Nothing ->
+                            { path = Array.pushFirst left leftTail, ab = { a = left.a, b = left.b + 1 } }
+
+                        Just { first = top, rest = topTail } ->
+                            -- this implies "remove" comes always earlier than "add"
+                            if left.b + 1 >= top.b then
+                                { path = Array.pushFirst left leftTail, ab = { a = left.a, b = left.b + 1 } }
+
+                            else
+                                { path = Array.pushFirst top topTail, ab = { a = top.a + 1, b = top.b } }
+
+        snaked : { path : Array { a : Int, b : Int }, done : Bool }
+        snaked =
+            snake_ (ab.a + 1) (ab.b + 1) (Array.pushFirst ab path)
+    in
+    if snaked.done then
+        Found snaked.path
+
+    else
+        Continue (Array.set (k + offset) snaked.path v)
+

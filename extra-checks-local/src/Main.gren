@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import StringSpellsCompanyNameCorrectly
+import ExtraChecksRunnerNode
+
+
+main =
+    ExtraChecksRunnerNode.program
+        { extraPaths = [ "README.md" ]
+        , checks =
+            [ StringSpellsCompanyNameCorrectly.check
+            ]
+        }

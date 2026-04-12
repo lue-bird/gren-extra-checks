@@ -1,0 +1,25 @@
+module Unicode exposing (dropFirst, takeFirst, length)
+
+{-| String functions that consider Unicode characters as a single characters, unlike `gren-lang/core`'s `String` type.
+-}
+
+
+dropFirst : Int -> String -> String
+dropFirst n string =
+    string
+        |> String.toArray
+        |> Array.dropFirst n
+        |> String.fromArray
+
+
+takeFirst : Int -> String -> String
+takeFirst n string =
+    string
+        |> String.toArray
+        |> Array.takeFirst n
+        |> String.fromArray
+
+
+length : String -> Int
+length string =
+    string |> String.toArray |> Array.length

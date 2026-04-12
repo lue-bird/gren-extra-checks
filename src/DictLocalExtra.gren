@@ -1,0 +1,107 @@
+module DictLocalExtra exposing (toArrayMap, flatToArrayMap, firstJustMap, fromArrayMap, unionWith)
+
+import Dict exposing (Dict)
+import Array.Builder
+
+
+toArrayMap : (key -> value -> element) -> Dict key value -> Array element
+toArrayMap keyValueToElement dict =
+    dict
+        |> Dict.foldl
+            (\key value soFar ->
+                soFar |> Array.Builder.pushLast (keyValueToElement key value)
+            )
+            (Array.Builder.empty 0)
+        |> Array.Builder.toArray
+
+
+fromArrayMap :
+    (element -> { key : comparableKey, value : value })
+    -> Array element
+    -> Dict comparableKey value
+fromArrayMap elementToEntry list =
+    list
+        |> Array.foldl
+            (\element soFar ->
+                let
+                    newEntry : { key : comparableKey, value : value }
+                    newEntry =
+                        element |> elementToEntry
+                in
+                soFar |> Dict.set newEntry.key newEntry.value
+            )
+            Dict.empty
+
+
+flatToArrayMap :
+    (key -> value -> Array element)
+    -> Dict key value
+    -> Array element
+flatToArrayMap keyValueToElement dict =
+    dict
+        |> Dict.foldr
+            (\key value soFar ->
+                keyValueToElement key value ++ soFar
+            )
+            []
+
+
+unionWith :
+    (v -> v -> v)
+    -> Dict comparable v
+    -> Dict comparable v
+    -> Dict comparable v
+unionWith valueABMerge aDict bDict =
+    if (aDict |> Dict.count) > (bDict |> Dict.count) then
+        Dict.foldl
+            (\key b soFar ->
+                soFar
+                    |> Dict.update key
+                        (\existingValueAtKey ->
+                            when existingValueAtKey is
+                                Nothing ->
+                                    b |> Just
+
+                                Just a ->
+                                    valueABMerge a b |> Just
+                        )
+            )
+            aDict
+            bDict
+
+    else
+        Dict.foldl
+            (\key a soFar ->
+                soFar
+                    |> Dict.update key
+                        (\existingValueAtKey ->
+                            when existingValueAtKey is
+                                Nothing ->
+                                    a |> Just
+
+                                Just b ->
+                                    valueABMerge a b |> Just
+                        )
+            )
+            bDict
+            aDict
+
+
+firstJustMap : (key -> value -> Maybe found) -> Dict key value -> Maybe found
+firstJustMap keyValueToMaybeFound fastDict =
+    fastDict
+        |> Dict.foldl
+            (\key value maybeFoundSoFar ->
+                when maybeFoundSoFar is
+                    (Just _) as justFoundSoFar ->
+                        justFoundSoFar
+
+                    Nothing ->
+                        when keyValueToMaybeFound key value is
+                            Nothing ->
+                                Nothing
+
+                            Just found ->
+                                Just found
+            )
+            Nothing

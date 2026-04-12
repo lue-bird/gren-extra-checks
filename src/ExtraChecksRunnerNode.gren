@@ -1,0 +1,1759 @@
+module ExtraChecksRunnerNode exposing
+    ( program, Program
+    , ProgramEvent(..), ProgramState
+    )
+
+{-|
+
+@docs program, Program
+
+If you experience a high memory footprint in a large project,
+please open an issue called "only ask for file sources to generate local error displays".
+
+That's all you need to know.
+Below are the internal types if you're interested:
+
+@docs ProgramEvent, ProgramState
+
+TODO improvements:
+- convert Stream.read stdin into "subscription-like",
+by adding it to init and restarting it on Typed event update
+- Clear the screen before displaying errors
+
+-}
+
+import Array exposing (Array)
+import Dict exposing (Dict)
+import Json.Decode
+import Json.Encode
+import ExtraCheck
+import Node
+import SourcePosition
+import Compiler.Outline
+import Compiler.Ast.Source
+import DictLocalExtra
+import Ansi
+import Diff
+import Unicode
+import Array.Builder
+import String.Parser.Advanced
+import Compiler.Parse.Module
+import Compiler.Parse.Context
+import FileSystem
+import Init
+import Platform.Sub
+import FileSystem.Path
+import Platform.Cmd
+import Task
+import Compiler.ModuleName
+import Compiler.Package
+import Compiler.Paths
+import Stream
+import Compiler.Platform
+import SemanticVersion
+import SemanticVersionRange
+import Compiler.License
+import Compiler.PackageName
+import Bytes
+import Stream.Log
+import Terminal
+import Bytes.Encode
+
+
+{-| An elm worker produced by [`ExtraCheck.Cli.Program`](ExtraCheck-Cli#Program)
+-}
+type alias Program =
+    Node.Program ProgramState ProgramEvent
+
+
+{-| elm model of a [`ExtraCheck.program`](#program)
+-}
+type ProgramState
+    = Exited
+    | Running
+        { environment : Node.Environment
+        , fileSystemPermission : FileSystem.Permission
+        , nextRuns : Array ExtraCheck.Run
+        , availableErrorsOnReject :
+            Dict
+                String
+                (Array
+                    { region : SourcePosition.Region
+                    , message : String
+                    , details : Array String
+                    , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
+                    }
+                )
+        , grenJson : { source : String, outline : Compiler.Outline.Outline }
+        , filesByPath : Dict String String
+        , directDependencies :
+            Array
+                { outline : Compiler.Outline.PkgOutline
+                , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+                }
+        }
+
+
+{-| elm msg of a [`ExtraChecksRunnerNode.program`](#program)
+-}
+type ProgramEvent
+    = ModuleWatchEvent { sourceDirectory : FileSystem.Path.Path, event : FileSystem.WatchEvent }
+    | ModuleAddedOrChanged { path : FileSystem.Path.Path, source : Result String String }
+    | ModuleRemoved { path : FileSystem.Path.Path }
+    | ExtraFileWatchEvent { path : String, event : FileSystem.WatchEvent }
+    | ExtraFileAddedOrChanged { path : FileSystem.Path.Path, source : Result String String }
+    | ExtraFileRemoved { path : FileSystem.Path.Path }
+    | ErrorFixRejected
+
+
+{-| Run checks, re-running on file changes.
+To be used from a node.js CLI program
+as showcased in [gren-extra-checks-cli-starter](https://github.com/lue-bird/gren-extra-checks-cli-starter)
+-}
+program :
+    { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> Program
+program config =
+    Node.defineProgram
+        { init = \environment -> initialize config environment
+        , update = \event state -> state |> reactToEvent config event
+        , subscriptions = \state -> state |> subscribe config
+        }
+
+
+readGrenPackage :
+    FileSystem.Permission
+    -> Compiler.Paths.CacheRoot
+    -> { name : String, version : Compiler.Outline.VersionConstraint SemanticVersion.SemanticVersion }
+    -> Task.Task String Compiler.Package.Package
+readGrenPackage fileSystemPermission cacheRoot { name, version } =
+    Compiler.Package.loadFromPath fileSystemPermission
+        (when version is
+            Compiler.Outline.LocalPath localPath ->
+                FileSystem.Path.fromPosixString ".."
+                    |> FileSystem.Path.append localPath
+
+            Compiler.Outline.Version semanticVersion ->
+                Compiler.Paths.packageSources cacheRoot
+                    |> FileSystem.Path.appendPosixString
+                        ((name |> String.replace "/" "_")
+                            ++ "__"
+                            ++ (semanticVersion |> SemanticVersion.toString |> String.replace "." "_")
+                        )
+        )
+        |> Task.mapError
+            (\error ->
+                (when error is
+                    Compiler.Package.FromPathOutlineInvalidString ->
+                        "invalid string"
+                    Compiler.Package.FromPathOutlineFileSystemError fileSystemError ->
+                        "file system error: "
+                            ++ (fileSystemError |> FileSystem.errorToString)
+                            ++ " (Is the gren version correct? If not, please modify your minimum-supported gren-version in your checked project's gren.json)"
+                    Compiler.Package.FromPathOutlineInvalidJson jsonError ->
+                        "invalid gren.json: "
+                            ++ (jsonError |> Json.Decode.errorToString)
+                    Compiler.Package.FromPathOutlineIsApp ->
+                        "invalid gren.json, expected type package"
+                    Compiler.Package.FromPathFindSourcesError _ ->
+                        "failed to find sources"
+                )
+                    ++ ", reading package "
+                    ++ name
+                    ++ ", "
+                    ++ (when version is
+                            Compiler.Outline.LocalPath localPath ->
+                                "from path " ++ (localPath |> FileSystem.Path.toPosixString)
+
+                            Compiler.Outline.Version semanticVersion ->
+                                "version "
+                                    ++ (semanticVersion |> SemanticVersion.toString)
+                       )
+            )
+
+
+readFileString : FileSystem.Permission -> FileSystem.Path.Path -> Task.Task String String
+readFileString fileSystemPermission path =
+    FileSystem.readFile fileSystemPermission
+        path
+        |> Task.mapError (\_ -> "file system error, reading " ++ (path |> FileSystem.Path.toPosixString))
+        |> Task.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Just string ->
+                        Task.succeed string
+
+                    Nothing ->
+                        Task.fail ("invalid string, reading " ++ (path |> FileSystem.Path.toPosixString))
+            )
+
+
+parseCompilerPackage :
+    Compiler.Package.Package
+    ->
+        { outline : Compiler.Outline.PkgOutline
+        , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        }
+parseCompilerPackage package =
+    { outline = package.outline
+    , modules =
+        package.sources
+            |> Dict.foldl
+                (\path source soFar ->
+                    when source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                        Err _ ->
+                            -- should largely not happen in practice
+                            -- if it does, a compiler error will be printed anyway
+                            soFar
+                        
+                        Ok syntax ->
+                            soFar
+                                |> Array.Builder.pushLast
+                                    { path = path
+                                    , source = source
+                                    , syntax = syntax
+                                    }
+                )
+                (Array.Builder.empty 1)
+            |> Array.Builder.toArray
+    }
+
+
+initialInfoTask :
+    { extraPaths : Array String
+    , fileSystemPermission : FileSystem.Permission
+    , platform : Node.Platform
+    }
+    ->
+        Task.Task
+            Never
+            (Result
+                String
+                { grenJson : { source : String, outline : Compiler.Outline.Outline }
+                , modules : Array { path : String, source : String }
+                , extraFiles : Array { path : String, source : String }
+                , directDependencies :
+                    Array
+                        { outline : Compiler.Outline.PkgOutline
+                        , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+                        }
+                }
+            )
+initialInfoTask { extraPaths, fileSystemPermission, platform } =
+    FileSystem.readFile fileSystemPermission
+        (FileSystem.Path.fromPosixString "../gren.json")
+        |> Task.mapError (\_ -> "file system error, reading ../gren.json")
+        |> Task.andThen
+            (\bytes ->
+                when Bytes.toString bytes is
+                    Just source ->
+                        when Json.Decode.decodeString Compiler.Outline.jsonDecoder source is
+                            Ok outline ->
+                                Task.succeed { outline = outline, source = source }
+
+                            Err jsonError ->
+                                Task.fail
+                                    ("invalid json, reading ../gren.json: " ++ (jsonError |> Json.Decode.errorToString))
+
+                    Nothing ->
+                        Task.fail "invalid string, reading ../gren.json"
+            )
+        |> Task.andThen
+            (\grenJson ->
+                Task.succeed
+                    (\directDependencies modules extraFileSources ->
+                        { modules =
+                            modules
+                                |> Array.map
+                                    (\module_ ->
+                                        { path =
+                                            module_.path
+                                                |> FileSystem.Path.toPosixString
+                                                -- TODO find less hacky solution to get the path
+                                                -- relative to the ..
+                                                |> String.dropFirst (String.unitLength "../")
+                                        , source = module_.source
+                                        }
+                                    ) 
+                        , grenJson = grenJson
+                        , directDependencies = directDependencies
+                        , extraFiles = extraFileSources
+                        }
+                    )
+                    |> Task.andMap
+                        (Task.succeed
+                            (\homeDirectory environmentVariables ->
+                                let
+                                    cacheRoot =
+                                        Compiler.Paths.cacheRoot
+                                            platform
+                                            environmentVariables
+                                            homeDirectory
+                                            (grenJson.outline |> compilerOutlineGrenVersionMinimum)
+                                in
+                                grenJson.outline
+                                    |> compilerOutlineDirectDependencies
+                                    |> Array.map
+                                        (\directDependency ->
+                                            readGrenPackage fileSystemPermission cacheRoot
+                                                directDependency
+                                                |> Task.map parseCompilerPackage
+                                        )
+                                    |> Task.concurrent
+                            )
+                            |> Task.andMap (FileSystem.homeDirectory fileSystemPermission)
+                            |> Task.andMap Node.getEnvironmentVariables
+                            |> Task.andThen Basics.identity
+                        )
+                    |> Task.andMap
+                        (Compiler.Outline.findSourceFiles fileSystemPermission
+                            grenJson.outline
+                            (FileSystem.Path.fromPosixString "..")
+                            |> Task.mapError
+                                (\error ->
+                                    when error is
+                                        Compiler.Outline.FileSystemError _ ->
+                                            "file system error, reading gren source files in .."
+                                        Compiler.Outline.FilePathInvalidModuleName { path, inferredModuleName } ->
+                                            "invalid file module name, reading gren source file "
+                                                ++ (path |> FileSystem.Path.toPosixString)
+                                                ++ ". Inferred module name would be "
+                                                ++ inferredModuleName
+                                        Compiler.Outline.FileContentNotValidString _ ->
+                                            "invalid string, reading gren source files in .."
+                                )
+                        )
+                    |> Task.andMap
+                        (extraPaths
+                            |> Array.map 
+                                (\extraPath ->
+                                    readFileString fileSystemPermission
+                                        (FileSystem.Path.fromPosixString ".."
+                                            |> FileSystem.Path.append
+                                                (FileSystem.Path.fromPosixString extraPath)
+                                        )
+                                    |> Task.map (\source -> { path = extraPath, source = source })
+                                )
+                            |> Task.concurrent
+                        )
+            )
+        |> taskSucceedToResult
+
+
+compilerOutlineGrenVersionMinimum : Compiler.Outline.Outline -> SemanticVersion.SemanticVersion
+compilerOutlineGrenVersionMinimum outline =
+    when outline is
+        Compiler.Outline.App app ->
+            app.grenVersion
+
+        Compiler.Outline.Pkg pkg ->
+            pkg.grenVersion |> SemanticVersionRange.lowerBound
+
+
+taskSucceedToResult task =
+    task
+        |> Task.map Ok
+        |> Task.onError (\error -> Task.succeed (Err error))
+
+
+check = "fruits.com"
+
+
+initialize :
+    { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> Node.Environment
+    -> Init.Task { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
+initialize config environment =
+    Init.await Terminal.initialize <| \maybeTerminalConfig ->
+    Init.await FileSystem.initialize
+        (\fileSystemPermission ->
+            Init.awaitTask
+                (Task.succeed (\info {} -> info)
+                    |> Task.andMap
+                        (initialInfoTask
+                            { extraPaths = config.extraPaths
+                            , fileSystemPermission = fileSystemPermission
+                            , platform = environment.platform
+                            }
+                        )
+                    |> Task.andMap
+                        (when maybeTerminalConfig is
+                            Nothing -> Task.succeed {}
+                            Just terminalConfig ->
+                                -- it would be nice to also listen for ctrl+c
+                                -- here but I haven't found a way to do this
+                                -- since e.g. exit is not a Task or no Task.race primitive exists
+                                Terminal.setStdInRawMode terminalConfig.permission True
+                        )
+                )
+                (\initialInfoOrError ->
+                    Node.startProgram
+                        (when initialInfoOrError is
+                            Err error ->
+                                { model = Exited
+                                , command =
+                                    Platform.Cmd.batch
+                                        [ Stream.Log.line environment.stderr error |> taskExecute
+                                        , Node.setExitCode 1 |> taskExecute
+                                        ]
+                                }
+
+                            Ok initialInfo ->
+                                when initialInfo.modules |> allModuleFilesToWithParsedSyntax is
+                                    Err parseErrors ->
+                                        -- it probably makes sense to instead stay in some
+                                        -- "partially initialized state"
+                                        -- and still watch for valid files to arrive
+                                        { model = Exited
+                                        , command =
+                                            Platform.Cmd.batch
+                                                [ Stream.Log.line environment.stderr
+                                                    (failedToParseModulesMessage parseErrors)
+                                                    |> taskExecute
+                                                , Node.setExitCode 1 |> taskExecute
+                                                ]
+                                        }
+
+                                    Ok modules ->
+                                        let
+                                            initialFilesByPath : Dict String String
+                                            initialFilesByPath =
+                                                Dict.union
+                                                    (initialInfo.extraFiles
+                                                        |> DictLocalExtra.fromArrayMap
+                                                            (\file -> { key = file.path, value = file.source })
+                                                    )
+                                                    (initialInfo.modules
+                                                        |> DictLocalExtra.fromArrayMap
+                                                            (\file -> { key = file.path, value = file.source })
+                                                    )
+
+                                            runResult :
+                                                { errorsByPath : Dict String (Array FileReviewError)
+                                                , nextRuns : Array ExtraCheck.Run
+                                                }
+                                            runResult =
+                                                { addedOrChangedModules = modules
+                                                , addedOrChangedExtraFiles = initialInfo.extraFiles
+                                                , directDependencies = initialInfo.directDependencies
+                                                , grenJson = initialInfo.grenJson
+                                                , removedExtraFilePaths = []
+                                                , removedModulePaths = []
+                                                }
+                                                    |> reviewRunList config.checks
+
+                                            maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                            maybeNextFixableErrorOrAllUnfixable =
+                                                runResult.errorsByPath
+                                                    |> errorsByPathToNextFixableErrorOrAll
+                                                        { elmJsonSource = initialInfo.grenJson.source
+                                                        , filesByPath = initialFilesByPath
+                                                        }
+                                        in
+                                        { model =
+                                            Running
+                                                { environment = environment
+                                                , fileSystemPermission = fileSystemPermission
+                                                , nextRuns = runResult.nextRuns
+                                                , availableErrorsOnReject =
+                                                    when maybeNextFixableErrorOrAllUnfixable is
+                                                        Nothing ->
+                                                            Dict.empty
+
+                                                        Just (AllUnfixable _) ->
+                                                            Dict.empty
+
+                                                        Just (Fixable nextFixable) ->
+                                                            nextFixable.otherErrors
+                                                , grenJson = initialInfo.grenJson
+                                                , filesByPath = initialFilesByPath
+                                                , directDependencies = initialInfo.directDependencies
+                                                }
+                                        , command =
+                                            when maybeNextFixableErrorOrAllUnfixable is
+                                                Nothing ->
+                                                    noErrorsWaitingForChanges
+                                                        { stdin = environment.stdin
+                                                        , stdout = environment.stdout
+                                                        }
+
+                                                Just nextFixableErrorOrAllUnfixable ->
+                                                    errorsReceived
+                                                        { fileSystemPermission = fileSystemPermission
+                                                        , stdin = environment.stdin
+                                                        , stdout = environment.stdout
+                                                        }
+                                                        { projectFilesByPath =
+                                                            initialFilesByPath
+                                                                |> Dict.set "gren.json" initialInfo.grenJson.source
+                                                        , errors = nextFixableErrorOrAllUnfixable
+                                                        }
+                                        }
+                        )
+                )
+        )
+
+
+subscribe :
+    { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> ProgramState
+    -> Platform.Sub.Sub ProgramEvent
+subscribe config stateOrExited =
+    when stateOrExited is
+        Exited ->
+            Platform.Sub.none
+
+        Running state ->
+            [ state.grenJson.outline
+                |> compilerOutlineSourceDirectories
+                |> Array.map
+                    (\sourceDirectory ->
+                        let
+                            relativeSourceDirectoryPath =
+                                (FileSystem.Path.fromPosixString ".."
+                                    |> FileSystem.Path.append sourceDirectory
+                                )
+                        in
+                        FileSystem.watchRecursive state.fileSystemPermission
+                            (\fileWatchEvent ->
+                                ModuleWatchEvent { sourceDirectory = sourceDirectory, event = fileWatchEvent }
+                            )
+                            relativeSourceDirectoryPath
+                    )
+                |> Platform.Sub.batch
+            , config.extraPaths
+                |> Array.map
+                    (\extraPath ->
+                        let
+                            relativeExtraPath =
+                                FileSystem.Path.fromPosixString ".."
+                                    |> FileSystem.Path.appendPosixString extraPath
+                        in
+                        FileSystem.watchRecursive state.fileSystemPermission
+                            (\fileWatchEvent ->
+                                ExtraFileWatchEvent { path = extraPath, event = fileWatchEvent }
+                            )
+                            relativeExtraPath
+                    )
+                |> Platform.Sub.batch
+            ]
+                |> Platform.Sub.batch
+
+
+compilerOutlineSourceDirectories : Compiler.Outline.Outline -> Array FileSystem.Path.Path
+compilerOutlineSourceDirectories outline =
+    when outline is
+        Compiler.Outline.App application ->
+            application.sourceDirectories
+
+        Compiler.Outline.Pkg _ ->
+            [ FileSystem.Path.fromPosixString "src" ]
+
+
+compilerOutlineDirectDependencies :
+    Compiler.Outline.Outline
+    -> Array { name : String, version : Compiler.Outline.VersionConstraint SemanticVersion.SemanticVersion }
+compilerOutlineDirectDependencies outline =
+    when outline is
+        Compiler.Outline.App app ->
+            app.dependencies.direct
+                |> Dict.foldl
+                    (\dependencyName dependencyVersionConstraint soFar ->
+                        soFar
+                            |> Array.Builder.pushLast
+                                { name = dependencyName
+                                , version = dependencyVersionConstraint
+                                }
+                    )
+                    (Array.Builder.empty 1)
+                |> Array.Builder.toArray
+
+        Compiler.Outline.Pkg pkg ->
+            pkg.dependencies
+                |> Dict.foldl
+                    (\dependencyName dependencyVersionConstraint soFar ->
+                        soFar
+                            |> Array.Builder.pushLast
+                                { name = dependencyName
+                                , version =
+                                    when dependencyVersionConstraint is
+                                        Compiler.Outline.LocalPath localPath ->
+                                            Compiler.Outline.LocalPath localPath
+
+                                        Compiler.Outline.Version versionRange ->
+                                            Compiler.Outline.Version
+                                                (versionRange |> SemanticVersionRange.lowerBound)
+                                }
+                    )
+                    (Array.Builder.empty 1)
+                |> Array.Builder.toArray
+
+
+reactToEvent :
+    { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> ProgramEvent
+    -> ProgramState
+    -> { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
+reactToEvent config event stateOrExited =
+    when stateOrExited is
+        Exited ->
+            { model = Exited, command = Platform.Cmd.none }
+        
+        Running state ->
+            when event is
+                ErrorFixRejected ->
+                    let
+                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                        maybeNextFixableErrorOrAllUnfixable =
+                            state.availableErrorsOnReject
+                                |> errorsByPathToNextFixableErrorOrAll
+                                    { elmJsonSource = state.grenJson.source
+                                    , filesByPath = state.filesByPath
+                                    }
+                    in
+                    { model =
+                        Running
+                            { state
+                                | availableErrorsOnReject =
+                                    when maybeNextFixableErrorOrAllUnfixable is
+                                        Nothing ->
+                                            Dict.empty
+
+                                        Just (AllUnfixable _) ->
+                                            Dict.empty
+
+                                        Just (Fixable nextFixable) ->
+                                            nextFixable.otherErrors
+                            }
+                    , command =
+                        when maybeNextFixableErrorOrAllUnfixable is
+                            Nothing ->
+                                noErrorsWaitingForChanges
+                                    { stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+
+                            Just nextFixableErrorOrAllUnfixable ->
+                                errorsReceived
+                                    { fileSystemPermission = state.fileSystemPermission
+                                    , stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+                                    { projectFilesByPath =
+                                        state.filesByPath
+                                            |> Dict.set "gren.json" state.grenJson.source
+                                    , errors = nextFixableErrorOrAllUnfixable
+                                    }
+                    }
+
+                ModuleWatchEvent { sourceDirectory, event = watchEvent } ->
+                    { model = stateOrExited
+                    , command =
+                        when watchEvent is
+                            FileSystem.Moved Nothing ->
+                                Stream.Log.line state.environment.stderr
+                                    ("warning: while watching the source directory "
+                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString) 
+                                        ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
+                                    )
+                                    |> taskExecute
+                            
+                            FileSystem.Changed Nothing ->
+                                Stream.Log.line state.environment.stderr
+                                    ("warning: while watching the source directory "
+                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString) 
+                                        ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
+                                    )
+                                    |> taskExecute
+
+                            FileSystem.Moved (Just subPath) ->
+                                let
+                                    removedOrAddedModulePath =
+                                        sourceDirectory |> FileSystem.Path.append subPath
+                                in
+                                readFileString state.fileSystemPermission
+                                    (FileSystem.Path.fromPosixString ".."
+                                        |> FileSystem.Path.append removedOrAddedModulePath
+                                    )
+                                    |> Task.attempt
+                                        (\result ->
+                                            when result is
+                                                -- improvement possibility: distinguish file system error and string conversion error
+                                                Err _ ->
+                                                    ModuleRemoved { path = removedOrAddedModulePath }
+                                                
+                                                Ok source ->
+                                                    ModuleAddedOrChanged { path = removedOrAddedModulePath, source = Ok source }
+                                        )
+                            
+                            FileSystem.Changed (Just subPath) ->
+                                let
+                                    changedModulePath =
+                                        sourceDirectory |> FileSystem.Path.append subPath
+                                in
+                                readFileString state.fileSystemPermission
+                                    (FileSystem.Path.fromPosixString ".."
+                                        |> FileSystem.Path.append changedModulePath
+                                    )
+                                    |> Task.attempt
+                                        (\sourceOrError ->
+                                            ModuleAddedOrChanged { path = changedModulePath, source = sourceOrError }
+                                        )
+                    }
+
+                ModuleAddedOrChanged moduleAddedOrChanged ->
+                    when moduleAddedOrChanged.source is
+                        Err error ->
+                            { model = stateOrExited
+                            , command = Stream.Log.line state.environment.stderr error |> taskExecute
+                            }
+
+                        Ok moduleAddedOrChangedSource ->
+                            let
+                                moduleAddedOrChangedPathPosix : String
+                                moduleAddedOrChangedPathPosix =
+                                    moduleAddedOrChanged.path |> FileSystem.Path.toPosixString
+                            in
+                            when moduleAddedOrChangedSource |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                                Err moduleParseError ->
+                                    { model = stateOrExited
+                                    , command =
+                                        Stream.Log.line state.environment.stderr
+                                            (failedToParseModulesMessage
+                                                [ { path = moduleAddedOrChangedPathPosix
+                                                  , error = moduleParseError |> Compiler.Parse.Module.errorsToString moduleAddedOrChangedSource
+                                                  }
+                                                ]
+                                            )
+                                            |> taskExecute
+                                    }
+
+                                Ok moduleAddedOrChangedParsed ->
+                                    let
+                                        filesByPathWithAddedOrChanged : Dict String String
+                                        filesByPathWithAddedOrChanged =
+                                            state.filesByPath
+                                                |> Dict.set moduleAddedOrChangedPathPosix moduleAddedOrChangedSource
+
+                                        runResult :
+                                            { errorsByPath : Dict String (Array FileReviewError)
+                                            , nextRuns : Array ExtraCheck.Run
+                                            }
+                                        runResult =
+                                            { addedOrChangedExtraFiles = []
+                                            , addedOrChangedModules =
+                                                [ { path = moduleAddedOrChangedPathPosix
+                                                  , source = moduleAddedOrChangedSource
+                                                  , syntax = moduleAddedOrChangedParsed
+                                                  }
+                                                ]
+                                            , directDependencies = []
+                                            , grenJson = state.grenJson
+                                            , removedExtraFilePaths = []
+                                            , removedModulePaths = []
+                                            }
+                                                |> reviewRunList
+                                                    (Array.map2 reviewWithRun
+                                                        state.nextRuns
+                                                        config.checks
+                                                    )
+
+                                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                        maybeNextFixableErrorOrAllUnfixable =
+                                            runResult.errorsByPath
+                                                |> errorsByPathToNextFixableErrorOrAll
+                                                    { elmJsonSource = state.grenJson.source
+                                                    , filesByPath = filesByPathWithAddedOrChanged
+                                                    }
+                                    in
+                                    { model =
+                                        Running
+                                            { state
+                                            | nextRuns = runResult.nextRuns
+                                            , availableErrorsOnReject =
+                                                when maybeNextFixableErrorOrAllUnfixable is
+                                                    Nothing ->
+                                                        Dict.empty
+
+                                                    Just (AllUnfixable _) ->
+                                                        Dict.empty
+
+                                                    Just (Fixable nextFixable) ->
+                                                        nextFixable.otherErrors
+                                            , grenJson = state.grenJson
+                                            , filesByPath = filesByPathWithAddedOrChanged
+                                            }
+                                    , command =
+                                        when maybeNextFixableErrorOrAllUnfixable is
+                                            Nothing ->
+                                                noErrorsWaitingForChanges
+                                                    { stdin = state.environment.stdin
+                                                    , stdout = state.environment.stdout
+                                                    }
+
+                                            Just nextFixableErrorOrAllUnfixable ->
+                                                errorsReceived
+                                                    { fileSystemPermission = state.fileSystemPermission
+                                                    , stdin = state.environment.stdin
+                                                    , stdout = state.environment.stdout
+                                                    }
+                                                    { projectFilesByPath =
+                                                        filesByPathWithAddedOrChanged
+                                                            |> Dict.set "gren.json" state.grenJson.source
+                                                    , errors = nextFixableErrorOrAllUnfixable
+                                                    }
+                                    }
+
+                ModuleRemoved moduleRemoved ->
+                    let
+                        moduleRemovedPathPosix : String
+                        moduleRemovedPathPosix =
+                            moduleRemoved.path |> FileSystem.Path.toPosixString
+
+                        filesByPathWithRemoved : Dict String String
+                        filesByPathWithRemoved =
+                            state.filesByPath
+                                |> Dict.remove moduleRemovedPathPosix
+
+                        runResult :
+                            { errorsByPath : Dict String (Array FileReviewError)
+                            , nextRuns : Array ExtraCheck.Run
+                            }
+                        runResult =
+                            { addedOrChangedExtraFiles = []
+                            , addedOrChangedModules = []
+                            , directDependencies = []
+                            , grenJson = state.grenJson
+                            , removedExtraFilePaths = []
+                            , removedModulePaths = [ moduleRemovedPathPosix ]
+                            }
+                                |> reviewRunList
+                                    (Array.map2 reviewWithRun
+                                        state.nextRuns
+                                        config.checks
+                                    )
+
+                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                        maybeNextFixableErrorOrAllUnfixable =
+                            runResult.errorsByPath
+                                |> errorsByPathToNextFixableErrorOrAll
+                                    { elmJsonSource = state.grenJson.source
+                                    , filesByPath = filesByPathWithRemoved
+                                    }
+                    in
+                    { model =
+                        Running
+                            { state
+                            | nextRuns = runResult.nextRuns
+                            , availableErrorsOnReject =
+                                when maybeNextFixableErrorOrAllUnfixable is
+                                    Nothing ->
+                                        Dict.empty
+
+                                    Just (AllUnfixable _) ->
+                                        Dict.empty
+
+                                    Just (Fixable nextFixable) ->
+                                        nextFixable.otherErrors
+                            , grenJson = state.grenJson
+                            , filesByPath = filesByPathWithRemoved
+                            }
+                    , command =
+                        when maybeNextFixableErrorOrAllUnfixable is
+                            Nothing ->
+                                noErrorsWaitingForChanges
+                                    { stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+
+                            Just nextFixableErrorOrAllUnfixable ->
+                                errorsReceived
+                                    { fileSystemPermission = state.fileSystemPermission
+                                    , stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+                                    { projectFilesByPath =
+                                        filesByPathWithRemoved
+                                            |> Dict.set "gren.json" state.grenJson.source
+                                    , errors = nextFixableErrorOrAllUnfixable
+                                    }
+                    }
+
+                ExtraFileWatchEvent { path = extraPath, event = watchEvent } ->
+                    { model = stateOrExited
+                    , command =
+                        when watchEvent is
+                            FileSystem.Moved Nothing ->
+                                Stream.Log.line state.environment.stderr
+                                    ("warning: while watching the extra path "
+                                        ++ extraPath
+                                        ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
+                                    )
+                                    |> taskExecute
+                            
+                            FileSystem.Changed Nothing ->
+                                Stream.Log.line state.environment.stderr
+                                    ("warning: while watching a the extra path "
+                                        ++ extraPath 
+                                        ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
+                                    )
+                                    |> taskExecute
+
+                            FileSystem.Moved (Just subPath) ->
+                                let
+                                    removedOrAddedModulePath =
+                                        FileSystem.Path.fromPosixString extraPath |> FileSystem.Path.append subPath
+                                in
+                                readFileString state.fileSystemPermission
+                                    (FileSystem.Path.fromPosixString ".."
+                                        |> FileSystem.Path.append removedOrAddedModulePath
+                                    )
+                                    |> Task.attempt
+                                        (\result ->
+                                            when result is
+                                                -- improvement possibility: distinguish file system error and string conversion error
+                                                Err _ ->
+                                                    ExtraFileRemoved { path = removedOrAddedModulePath }
+                                                
+                                                Ok source ->
+                                                    ExtraFileAddedOrChanged { path = removedOrAddedModulePath, source = Ok source }
+                                        )
+                            
+                            FileSystem.Changed (Just subPath) ->
+                                let
+                                    changedModulePath =
+                                        FileSystem.Path.fromPosixString extraPath |> FileSystem.Path.append subPath
+                                in
+                                readFileString state.fileSystemPermission
+                                    (FileSystem.Path.fromPosixString ".."
+                                        |> FileSystem.Path.append changedModulePath
+                                    )
+                                    |> Task.attempt
+                                        (\sourceOrError ->
+                                            ExtraFileAddedOrChanged { path = changedModulePath, source = sourceOrError }
+                                        )
+                    }
+
+                ExtraFileAddedOrChanged extraFileAddedOrChanged ->
+                    when extraFileAddedOrChanged.source is
+                        Err error ->
+                            { model = stateOrExited
+                            , command = Stream.Log.line state.environment.stderr error |> taskExecute
+                            }
+                        
+                        Ok extraFileAddedOrChangedSource ->
+                            let
+                                fileAddedOrChangedPathPosix : String
+                                fileAddedOrChangedPathPosix =
+                                    extraFileAddedOrChanged.path |> FileSystem.Path.toPosixString
+
+                                filesByPathWithAddedOrChanged : Dict String String
+                                filesByPathWithAddedOrChanged =
+                                    state.filesByPath
+                                        |> Dict.set fileAddedOrChangedPathPosix extraFileAddedOrChangedSource
+
+                                runResult :
+                                    { errorsByPath : Dict String (Array FileReviewError)
+                                    , nextRuns : Array ExtraCheck.Run
+                                    }
+                                runResult =
+                                    { addedOrChangedExtraFiles =
+                                        [ { path = fileAddedOrChangedPathPosix, source = extraFileAddedOrChangedSource } ]
+                                    , addedOrChangedModules = []
+                                    , directDependencies = []
+                                    , grenJson = state.grenJson
+                                    , removedExtraFilePaths = []
+                                    , removedModulePaths = []
+                                    }
+                                        |> reviewRunList
+                                            (Array.map2 reviewWithRun
+                                                state.nextRuns
+                                                config.checks
+                                            )
+
+                                maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                maybeNextFixableErrorOrAllUnfixable =
+                                    runResult.errorsByPath
+                                        |> errorsByPathToNextFixableErrorOrAll
+                                            { elmJsonSource = state.grenJson.source
+                                            , filesByPath = filesByPathWithAddedOrChanged
+                                            }
+                            in
+                            { model =
+                                Running
+                                    { state
+                                    | nextRuns = runResult.nextRuns
+                                    , availableErrorsOnReject =
+                                        when maybeNextFixableErrorOrAllUnfixable is
+                                            Nothing ->
+                                                Dict.empty
+
+                                            Just (AllUnfixable _) ->
+                                                Dict.empty
+
+                                            Just (Fixable nextFixable) ->
+                                                nextFixable.otherErrors
+                                    , grenJson = state.grenJson
+                                    , filesByPath = filesByPathWithAddedOrChanged
+                                    }
+                            , command =
+                                when maybeNextFixableErrorOrAllUnfixable is
+                                    Nothing ->
+                                        noErrorsWaitingForChanges
+                                            { stdin = state.environment.stdin
+                                            , stdout = state.environment.stdout
+                                            }
+
+                                    Just nextFixableErrorOrAllUnfixable ->
+                                        errorsReceived
+                                            { fileSystemPermission = state.fileSystemPermission
+                                            , stdin = state.environment.stdin
+                                            , stdout = state.environment.stdout
+                                            }
+                                            { projectFilesByPath =
+                                                filesByPathWithAddedOrChanged
+                                                    |> Dict.set "gren.json" state.grenJson.source
+                                            , errors = nextFixableErrorOrAllUnfixable
+                                            }
+                            }
+
+                ExtraFileRemoved fileRemoved ->
+                    let
+                        fileRemovedPathPosix : String
+                        fileRemovedPathPosix =
+                            fileRemoved.path |> FileSystem.Path.toPosixString
+
+                        filesByPathWithRemoved : Dict String String
+                        filesByPathWithRemoved =
+                            state.filesByPath
+                                |> Dict.remove fileRemovedPathPosix
+
+                        runResult :
+                            { errorsByPath : Dict String (Array FileReviewError)
+                            , nextRuns : Array ExtraCheck.Run
+                            }
+                        runResult =
+                            { addedOrChangedExtraFiles = []
+                            , addedOrChangedModules = []
+                            , directDependencies = []
+                            , grenJson = state.grenJson
+                            , removedExtraFilePaths = [ fileRemovedPathPosix ]
+                            , removedModulePaths = []
+                            }
+                                |> reviewRunList
+                                    (Array.map2 reviewWithRun
+                                        state.nextRuns
+                                        config.checks
+                                    )
+
+                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                        maybeNextFixableErrorOrAllUnfixable =
+                            runResult.errorsByPath
+                                |> errorsByPathToNextFixableErrorOrAll
+                                    { elmJsonSource = state.grenJson.source
+                                    , filesByPath = filesByPathWithRemoved
+                                    }
+                    in
+                    { model =
+                        Running
+                            { state
+                            | nextRuns = runResult.nextRuns
+                            , availableErrorsOnReject =
+                                when maybeNextFixableErrorOrAllUnfixable is
+                                    Nothing ->
+                                        Dict.empty
+
+                                    Just (AllUnfixable _) ->
+                                        Dict.empty
+
+                                    Just (Fixable nextFixable) ->
+                                        nextFixable.otherErrors
+                            , grenJson = state.grenJson
+                            , filesByPath = filesByPathWithRemoved
+                            }
+                    , command =
+                        when maybeNextFixableErrorOrAllUnfixable is
+                            Nothing ->
+                                noErrorsWaitingForChanges
+                                    { stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+
+                            Just nextFixableErrorOrAllUnfixable ->
+                                errorsReceived
+                                    { fileSystemPermission = state.fileSystemPermission
+                                    , stdin = state.environment.stdin
+                                    , stdout = state.environment.stdout
+                                    }
+                                    { projectFilesByPath =
+                                        filesByPathWithRemoved
+                                            |> Dict.set "gren.json" state.grenJson.source
+                                    , errors = nextFixableErrorOrAllUnfixable
+                                    }
+                    }
+
+
+noErrorsWaitingForChanges { stdin, stdout } =
+    Stream.Log.line stdout
+        "\nNo further errors currently, watching for changes... Exit with ctrl+c\n"
+        |> taskExecute
+
+
+ctrlCBytes : Bytes.Bytes
+ctrlCBytes =
+    Bytes.Encode.encode (Bytes.Encode.unsignedInt8 3)
+
+
+errorsReceived :
+    { fileSystemPermission : FileSystem.Permission
+    , stdin : Stream.Readable Bytes.Bytes
+    , stdout : Stream.Writable Bytes.Bytes
+    }
+    ->
+        { projectFilesByPath : Dict.Dict String.String String.String
+        , errors : NextFixableOrAllUnfixable
+        }
+    -> Platform.Cmd.Cmd ProgramEvent
+errorsReceived { fileSystemPermission, stdin, stdout } { projectFilesByPath, errors } =
+    when errors is
+        AllUnfixable unfixableErrors ->
+            Stream.Log.string stdout
+                (unfixableErrors
+                    |> Dict.foldl
+                        (\path pathErrors soFar ->
+                            soFar
+                                ++ (pathErrors
+                                        |> Array.map
+                                            (\error ->
+                                                { path = path
+                                                , region = error.region
+                                                , message = error.message
+                                                , details = error.details
+                                                , fixedSources = []
+                                                }
+                                                    |> errorDisplay
+                                                        (projectFilesByPath
+                                                            |> Dict.get path
+                                                            |> Maybe.withDefault ""
+                                                        )
+                                            )
+                                        |> String.join "\n\n"
+                                   )
+                                ++ "\n\n\n"
+                        )
+                        ""
+                )
+                |> taskExecute
+
+        Fixable { fixable, otherErrors } ->
+            -- TODO ask for fixable, if no print errors (?)
+            Stream.Log.line stdout
+                (fixable
+                    |> errorDisplay
+                        fixable.source
+                )
+                |> Task.andThen
+                    (\{} ->
+                        Stream.Log.line stdout
+                            "\nApply these edits by pressing y. Reject by pressing n"
+                    )
+                |> Task.andThen
+                    (\{} ->
+                        Stream.read stdin
+                            |> taskSucceedToResult
+                            |> Task.map
+                                (\response ->
+                                    let
+                                        acceptedOrExitErr : Result {} Bool
+                                        acceptedOrExitErr =
+                                            when response is 
+                                                Err _ -> Ok False
+                                                Ok responseBytes ->
+                                                    if responseBytes == ctrlCBytes then
+                                                        Err {}
+                                                    else
+                                                        Ok
+                                                            (when responseBytes |> Bytes.toString is
+                                                                Just "y" -> True
+                                                                Just "Y" -> True
+                                                                Just "\n" -> True
+                                                                _ -> False
+                                                            )
+                                    in
+                                    when acceptedOrExitErr is
+                                        Err {} ->
+                                            Stream.Log.line stdout ""
+                                                |> Task.map (\{} -> Node.exitWithCode 1)
+                                                |> Task.executeCmd
+                                        Ok True ->
+                                            fixable.fixedSources
+                                                |> Array.map
+                                                    (\fix ->
+                                                        FileSystem.writeFile fileSystemPermission
+                                                            (fix.fixedSource |> Bytes.fromString)
+                                                            (FileSystem.Path.fromPosixString ".."
+                                                                |> FileSystem.Path.appendPosixString fix.path
+                                                            )
+                                                    )
+                                                |> Task.concurrent
+                                                |> taskSucceedToResult
+                                                |> Task.andThen
+                                                    (\result ->
+                                                        when result is
+                                                            Err error ->
+                                                                Stream.Log.line stdout
+                                                                    ("Failed to apply this fix to at least one file: "
+                                                                        ++ (error |> FileSystem.errorToString)
+                                                                        ++ "\n"
+                                                                    )
+
+                                                            Ok _ ->
+                                                                Stream.Log.line stdout
+                                                                    "Ok, this fix was applied successfully.\n"
+                                                    )
+                                                |> taskExecute
+                                        Ok False ->
+                                            -- TODO go through otherErrors
+                                            Stream.Log.line stdout
+                                                "Ok, this fix was not applied.\n"
+                                                |> Task.perform (\{} -> ErrorFixRejected)
+                                )
+                    )
+                |> Task.executeCmd
+
+
+failedToParseModulesMessage : Array { path : String, error : String } -> String
+failedToParseModulesMessage pathsThatFailedToParse =
+    when pathsThatFailedToParse is
+        [] ->
+            "weird bug in gren-extra-checks: failed to parse paths but none were recorded"
+
+        [ { path = errorPath, error = deadEndsAsString } ] ->
+            "module at path "
+                ++ errorPath
+                ++ " failed to parse:\n"
+                ++ deadEndsAsString
+
+        nonSinglePathsThatFailedToParse ->
+            "modules failed to parse:"
+                ++ (nonSinglePathsThatFailedToParse
+                        |> Array.foldl
+                            (\{ path = errorPath, error = deadEndsAsString } soFar ->
+                                soFar
+                                    ++ "\n\n- at path "
+                                    ++ errorPath
+                                    ++ ":\n"
+                                    ++ deadEndsAsString
+                            )
+                            ""
+                   )
+
+
+reviewWithRun : ExtraCheck.Run -> ExtraCheck.Check -> ExtraCheck.Check
+reviewWithRun nextRun review =
+    { ignoreErrorsForPathsWhere = review.ignoreErrorsForPathsWhere
+    , run = nextRun
+    }
+
+
+reviewRunList :
+    Array ExtraCheck.Check
+    ->
+        { grenJson : { source : String, outline : Compiler.Outline.Outline }
+        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }
+        , addedOrChangedExtraFiles : Array { path : String, source : String }
+        , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        , removedExtraFilePaths : Array String
+        , removedModulePaths : Array String
+        }
+    ->
+        { errorsByPath : Dict String (Array FileReviewError)
+        , nextRuns : Array ExtraCheck.Run
+        }
+reviewRunList checks project =
+    let
+        runResultsForReviews :
+            Array
+                { errorsByPath : Dict String (Array FileReviewError)
+                , nextRun : ExtraCheck.Run
+                }
+        runResultsForReviews =
+            checks |> Array.map (\review -> project |> ExtraCheck.run review)
+    in
+    { errorsByPath =
+        runResultsForReviews
+            |> Array.foldl
+                (\runResultForReview soFar ->
+                    DictLocalExtra.unionWith (\new already -> new ++ already)
+                        runResultForReview.errorsByPath
+                        soFar
+                )
+                Dict.empty
+            |> Dict.map
+                (\_ errors ->
+                    errors |> Array.sortWith (\a b -> sourceRegionCompare a.region b.region)
+                )
+    , nextRuns = runResultsForReviews |> Array.map .nextRun
+    }
+
+
+sourceRegionCompare : SourcePosition.Region -> SourcePosition.Region -> Order
+sourceRegionCompare a b =
+    when sourcePositionCompare a.start b.start is
+        LT -> LT
+        GT -> GT
+        EQ ->
+            sourcePositionCompare a.end b.end
+
+
+sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare a b =
+    when Basics.compare a.col b.col is
+        LT -> LT
+        GT -> GT
+        EQ ->
+            Basics.compare a.row b.row
+
+
+errorsByPathToNextFixableErrorOrAll :
+    { elmJsonSource : String, filesByPath : Dict String String }
+    -> Dict String (Array FileReviewError)
+    -> Maybe NextFixableOrAllUnfixable
+errorsByPathToNextFixableErrorOrAll project errorsByPath =
+    let
+        sourceAtPath : String -> Maybe String
+        sourceAtPath path =
+            when path is
+                "gren.json" ->
+                    project.elmJsonSource |> Just
+
+                filePath ->
+                    project.filesByPath |> Dict.get filePath
+
+        nextFixableErrorOrAll :
+            { fixable :
+                Maybe
+                    { source : String
+                    , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                    , message : String
+                    , details : Array String
+                    , region : SourcePosition.Region
+                    , path : String
+                    }
+            , otherErrors : Dict String (Array FileReviewError)
+            }
+        nextFixableErrorOrAll =
+            errorsByPath
+                |> Dict.foldl
+                    (\path errors soFar ->
+                        let
+                            errorsFixableErrorOrAll :
+                                { fixable :
+                                    Maybe
+                                        { source : String
+                                        , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                                        , message : String
+                                        , details : Array String
+                                        , region : SourcePosition.Region
+                                        , path : String
+                                        }
+                                , otherErrors : Array FileReviewError
+                                }
+                            errorsFixableErrorOrAll =
+                                when soFar.fixable is
+                                    Just soFarFix ->
+                                        { fixable = soFarFix |> Just, otherErrors = errors }
+
+                                    Nothing ->
+                                        when sourceAtPath path is
+                                            Nothing ->
+                                                { fixable = Nothing, otherErrors = [] }
+
+                                            Just pathSource ->
+                                                errors
+                                                    |> Array.foldl
+                                                        (\error errorsResultSoFar ->
+                                                            let
+                                                                fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                                                                fixedSources =
+                                                                    error.fixEditsByPath
+                                                                        |> Dict.foldl
+                                                                            (\fixPath fileEdits soFarFixedSources ->
+                                                                                when sourceAtPath fixPath is
+                                                                                    Nothing ->
+                                                                                        soFarFixedSources
+
+                                                                                    Just sourceToFix ->
+                                                                                        when sourceToFix |> ExtraCheck.sourceApplyEdits fileEdits is
+                                                                                            Ok fixedSource ->
+                                                                                                soFarFixedSources
+                                                                                                    |> Array.Builder.pushLast
+                                                                                                        { path = fixPath
+                                                                                                        , fixedSource = fixedSource
+                                                                                                        , originalSource = sourceToFix
+                                                                                                        }
+
+                                                                                            Err _ ->
+                                                                                                soFarFixedSources
+                                                                            )
+                                                                            (Array.Builder.empty 0)
+                                                                        |> Array.Builder.toArray
+                                                            in
+                                                            if fixedSources |> Array.isEmpty then
+                                                                { fixable = Nothing
+                                                                , otherErrors = errorsResultSoFar.otherErrors |> Array.Builder.pushLast error
+                                                                }
+
+                                                            else
+                                                                { fixable =
+                                                                    { source = pathSource
+                                                                    , fixedSources = fixedSources
+                                                                    , message = error.message
+                                                                    , details = error.details
+                                                                    , region = error.region
+                                                                    , path = path
+                                                                    }
+                                                                        |> Just
+                                                                , otherErrors = errorsResultSoFar.otherErrors
+                                                                }
+                                                        )
+                                                        { fixable = Nothing
+                                                        , otherErrors = Array.Builder.empty 0
+                                                        }
+                                                    |> (\result ->
+                                                            { fixable = result.fixable
+                                                            , otherErrors = result.otherErrors |> Array.Builder.toArray 
+                                                            }
+                                                       )
+                        in
+                        { fixable = errorsFixableErrorOrAll.fixable
+                        , otherErrors = soFar.otherErrors |> Dict.set path errorsFixableErrorOrAll.otherErrors
+                        }
+                    )
+                    { fixable = Nothing
+                    , otherErrors = Dict.empty
+                    }
+
+        otherErrorsByPath : Dict String (Array FileReviewError)
+        otherErrorsByPath =
+            nextFixableErrorOrAll.otherErrors
+                |> Dict.keepIf
+                    (\_ errors ->
+                        Basics.not (Array.isEmpty errors)
+                    )
+    in
+    when nextFixableErrorOrAll.fixable is
+        Just fixable ->
+            Fixable { fixable = fixable, otherErrors = otherErrorsByPath }
+                |> Just
+
+        Nothing ->
+            if otherErrorsByPath |> Dict.isEmpty then
+                Nothing
+
+            else
+                AllUnfixable otherErrorsByPath |> Just
+
+
+allModuleFilesToWithParsedSyntax :
+    Array { source : String, path : String }
+    ->
+        Result
+            (Array { path : String, error : String })
+            (Array { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+allModuleFilesToWithParsedSyntax moduleFiles =
+    moduleFiles
+        |> Array.foldl
+            (\moduleFile soFar ->
+                when moduleFile.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                    Err moduleParseDeadEnds ->
+                        let
+                            error =
+                                { path = moduleFile.path
+                                , error = moduleParseDeadEnds |> Compiler.Parse.Module.errorsToString moduleFile.source
+                                }
+                        in
+                        when soFar is
+                            Ok _ ->
+                                Err
+                                    (Array.Builder.empty 1
+                                        |> Array.Builder.pushLast error
+                                    )
+
+                            Err soFarErrors ->
+                                Err
+                                    (soFarErrors
+                                        |> Array.Builder.pushLast error
+                                    )
+
+                    Ok syntax ->
+                        when soFar is
+                            Err soFarErrorPaths ->
+                                Err soFarErrorPaths
+
+                            Ok soFarWithParsedSyntax ->
+                                soFarWithParsedSyntax
+                                    |> Array.Builder.pushLast
+                                        { path = moduleFile.path, source = moduleFile.source, syntax = syntax }
+                                    |> Ok
+            )
+            (Array.Builder.empty 2 |> Ok)
+            |> Result.mapError Array.Builder.toArray
+            |> Result.map Array.Builder.toArray
+
+
+type alias FileReviewError =
+    { region : SourcePosition.Region
+    , message : String
+    , details : Array String
+    , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
+    }
+
+
+errorDisplay :
+    String
+    ->
+        { error_
+            | path : String
+            , region : SourcePosition.Region
+            , message : String
+            , details : Array String
+            , fixedSources :
+                Array
+                    { path : String
+                    , fixedSource : String
+                    , originalSource : String
+                    }
+        }
+    -> String
+errorDisplay source error =
+    (error.message |> Ansi.cyan |> Ansi.bold)
+        ++ "  in "
+        ++ error.path
+        ++ ":"
+        ++ (error.region.start.row |> String.fromInt)
+        ++ ":"
+        ++ (error.region.start.col |> String.fromInt)
+        ++ "\n\n"
+        ++ (codeExtract source error.region
+                |> String.split "\n"
+                |> Array.map (\line -> "|   " ++ line)
+                |> String.join "\n"
+           )
+        ++ "\n\n"
+        ++ (error.details |> String.join "\n\n")
+        ++ (if error.fixedSources |> Array.isEmpty then
+                ""
+
+            else
+                -- TODO special case single-path fixes for clearer wording and formatting
+                "\n\nI can fix this for you by changing\n"
+                    ++ (error.fixedSources
+                            |> Array.map
+                                (\fileFixedSource ->
+                                    "in "
+                                        ++ fileFixedSource.path
+                                        ++ "\n"
+                                        ++ sourceHighlightDifferentLines
+                                            fileFixedSource.originalSource
+                                            fileFixedSource.fixedSource
+                                )
+                            |> String.join "\n\n"
+                        )
+           )
+
+
+sourceHighlightDifferentLines : String -> String -> String
+sourceHighlightDifferentLines aString bString =
+    let
+        highlightedAndFinalNoChangeLines :
+            { continuousNoChangeLines : Array.Builder.Builder String
+            , highlighted : String
+            }
+        highlightedAndFinalNoChangeLines =
+            Diff.diff (aString |> String.lines) (bString |> String.lines)
+                |> Array.foldl
+                    (\change soFar ->
+                        when change is
+                            Diff.NoChange line ->
+                                { continuousNoChangeLines =
+                                    soFar.continuousNoChangeLines
+                                        |> Array.Builder.pushLast line
+                                , highlighted = soFar.highlighted
+                                }
+
+                            Diff.Added line ->
+                                { continuousNoChangeLines = Array.Builder.empty 0
+                                , highlighted =
+                                    soFar.highlighted
+                                        ++ (soFar.continuousNoChangeLines
+                                                |> Array.Builder.toArray
+                                                |> continuousNoChangeLinesCollapse
+                                           )
+                                        ++ "\n"
+                                        ++ Ansi.green ("|   " ++ line)
+                                }
+
+                            Diff.Removed line ->
+                                { continuousNoChangeLines = Array.Builder.empty 0
+                                , highlighted =
+                                    soFar.highlighted
+                                        ++ (soFar.continuousNoChangeLines
+                                                |> Array.Builder.toArray
+                                                |> continuousNoChangeLinesCollapse
+                                           )
+                                        ++ "\n"
+                                        ++ Ansi.red ("|   " ++ line)
+                                }
+                    )
+                    { continuousNoChangeLines = Array.Builder.empty 0, highlighted = "" }
+    in
+    when highlightedAndFinalNoChangeLines.continuousNoChangeLines |> Array.Builder.toArray |> Array.first is
+        Nothing ->
+            highlightedAndFinalNoChangeLines.highlighted
+
+        Just nextNoChangeLine ->
+            highlightedAndFinalNoChangeLines.highlighted
+                ++ "\n|   "
+                ++ nextNoChangeLine
+
+
+continuousNoChangeLinesCollapse : Array String -> String
+continuousNoChangeLinesCollapse noChangeLines =
+    when noChangeLines |> Array.popFirst is
+        Nothing ->
+            ""
+
+        Just { first = noChangeLine0, rest = noChangeLine1Up } ->
+            when noChangeLine1Up |> Array.last is
+                Nothing ->
+                    "\n|   " ++ noChangeLine0
+                
+                Just lastLine ->
+                    if (noChangeLines |> Array.length) == 2 then
+                        "\n|   "
+                            ++ noChangeLine0
+                            ++ "\n"
+                            ++ "|   "
+                            ++ lastLine
+
+                    else
+                        "\n|   "
+                            ++ noChangeLine0
+                            ++ "\n⋮\n"
+                            ++ "|   "
+                            ++ lastLine
+
+
+codeExtract : String -> SourcePosition.Region -> String
+codeExtract source region =
+    let
+        sourceLines : Array String
+        sourceLines =
+            source |> String.lines
+
+        sourceLineAtRow : Int -> String
+        sourceLineAtRow rowIndex =
+            when sourceLines |> Array.get rowIndex is
+                Just line ->
+                    line |> String.trimRight
+
+                Nothing ->
+                    ""
+    in
+    if region.start.row == region.end.row then
+        if region.start.col == region.end.col then
+            ""
+
+        else
+            [ sourceLineAtRow (region.start.row - 2)
+            , sourceLineAtRow (region.start.row - 1)
+                |> withErrorHighlightedRange
+                    { start = region.start.col, end = region.end.col }
+            , sourceLineAtRow region.end.row
+            ]
+                |> Array.keepIf (\l -> not (String.isEmpty l))
+                |> String.join "\n"
+
+    else
+        [ [ sourceLineAtRow (region.start.row - 2)
+          , let
+                startLineContent : String
+                startLineContent =
+                    sourceLineAtRow (region.start.row - 1)
+            in
+            startLineContent
+                |> withErrorHighlightedRange
+                    { start = region.start.col
+                    , end = (startLineContent |> Unicode.length) + 1
+                    }
+          ]
+            |> Array.keepIf (\l -> not (l |> String.isEmpty))
+            |> String.join "\n"
+        , Array.range region.start.row (region.end.row - 2)
+            |> Array.map
+                (\middleLine ->
+                    sourceLineAtRow middleLine |> Ansi.backgroundRed
+                )
+            |> String.join "\n"
+        , [ let
+                endLineContent : String
+                endLineContent =
+                    sourceLineAtRow (region.end.row - 1)
+            in
+            endLineContent
+                |> withErrorHighlightedRange
+                    { start = getIndexOfFirstNonSpace endLineContent + 1
+                    , end = region.end.col
+                    }
+          , sourceLineAtRow region.end.row
+          ]
+            |> Array.keepIf (\l -> not (l |> String.isEmpty))
+            |> String.join "\n"
+        ]
+            |> String.join "\n"
+
+
+getIndexOfFirstNonSpace : String -> Int
+getIndexOfFirstNonSpace string =
+    (string |> String.unitLength) - (string |> String.trimLeft |> String.unitLength)
+
+
+withErrorHighlightedRange : { start : Int, end : Int } -> (String -> String)
+withErrorHighlightedRange lineRange lineContent =
+    (lineContent |> Unicode.takeFirst (lineRange.start - 1))
+        ++ (lineContent
+                |> Unicode.dropFirst (lineRange.start - 1)
+                |> Unicode.takeFirst (lineRange.end - lineRange.start)
+                |> Ansi.backgroundRed
+           )
+        ++ (lineContent
+                |> Unicode.dropFirst
+                    (lineRange.start - 1 + lineRange.end - lineRange.start)
+           )
+
+
+type NextFixableOrAllUnfixable
+    = AllUnfixable (Dict String (Array FileReviewError))
+    | Fixable
+        { fixable :
+            { source : String
+            , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+            , message : String
+            , details : Array String
+            , region : SourcePosition.Region
+            , path : String
+            }
+        , otherErrors : Dict String (Array FileReviewError)
+        }
+
+
+{-| Safer alternative to `Task.execute` that doesn't allow you to accidentally
+pass a Task that returns an event. Use `Task.perform`/`Task.attempt` for these.
+
+To deliberately ignore a value resulting from a `Task`, use `Task.map (\_ -> {})`
+or use the appropriate task (e.g. `Stream.Log.string` instead of a regular stream write)
+-}
+taskExecute : Task.Task Basics.Never {} -> Platform.Cmd.Cmd event_
+taskExecute task =
+    task |> Task.execute

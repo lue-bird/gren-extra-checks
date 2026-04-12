@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+
+import Tests
+import Test.Runner.Node
+
+
+main : Test.Runner.Node.Program
+main =
+    Test.Runner.Node.run Tests.tests

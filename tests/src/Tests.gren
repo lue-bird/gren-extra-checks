@@ -1,0 +1,230 @@
+module Tests exposing (tests)
+
+import ExtraCheck
+import StringSpellsCompanyNameCorrectly
+import Test exposing (Test)
+
+
+tests : Test
+tests =
+    Test.describe "gren-extra-checks"
+        [ Test.describe "StringSpellsCompanyNameCorrectly"
+            [ Test.test "(should pass) fruits.com in string is accepted"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is fruits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors = []
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should pass) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "misspelled fruits.com"
+                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                          , region = ExtraCheck.ExpectUnder "frits.com"
+                          , fixedFiles =
+                                [ { path = "src/A.gren"
+                                  , source = """
+                                        module A exposing (a)
+                                        
+                                        a =
+                                            "the name is obviously fruits.com"
+                                        """
+                                  }
+                                ]
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because module source doesn't parse) fruits.com in string is accepted"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously fruits.com
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        []
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because missing errors) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        []
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because missing fixes) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "misspelled fruits.com"
+                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                          , region = ExtraCheck.ExpectUnder "frits.com"
+                          , fixedFiles = []
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because incorrect range) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "misspelled fruits.com"
+                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                          , region = ExtraCheck.ExpectUnder "\"the name is obviously frits.com\""
+                          , fixedFiles =
+                                [ { path = "src/A.gren"
+                                  , source = """
+                                        module A exposing (a)
+                                        
+                                        a =
+                                            "the name is obviously fruits.com"
+                                        """
+                                  }
+                                ]
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because fixed module source doesn't parse) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "misspelled fruits.com"
+                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                          , region = ExtraCheck.ExpectUnder "frits.com"
+                          , fixedFiles =
+                                [ { path = "src/A.gren"
+                                  , source = """
+                                        module A exposing (a)
+                                        
+                                        a =
+                                            "the name is obviously fruits.com
+                                        """
+                                  }
+                                ]
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "(should fail because fixed module source doesn't match) frits.com in string is reported"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source = """
+                                module A exposing (a)
+                                
+                                a =
+                                    "the name is obviously frits.com"
+                                """
+                          }
+                        ]
+                    , check = StringSpellsCompanyNameCorrectly.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "misspelled fruits.com"
+                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                          , region = ExtraCheck.ExpectUnder "frits.com"
+                          , fixedFiles =
+                                [ { path = "src/A.gren"
+                                  , source = """
+                                        module A exposing (a)
+                                        
+                                        a =
+                                            "the name is obviously fruity.com"
+                                        """
+                                  }
+                                ]
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            ]
+        ]

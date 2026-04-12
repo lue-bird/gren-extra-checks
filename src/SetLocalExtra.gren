@@ -1,0 +1,21 @@
+module SetLocalExtra exposing (fromListMap, fromList)
+
+import Set exposing (Set)
+
+
+fromList : Array comparableElement -> Set comparableElement
+fromList list =
+    list
+        |> Array.foldl
+            (\element acc -> acc |> Set.set element)
+            Set.empty
+
+
+fromListMap : (element -> comparableElement) -> Array element -> Set comparableElement
+fromListMap toComparable list =
+    list
+        |> Array.foldl
+            (\element acc ->
+                acc |> Set.set (element |> toComparable)
+            )
+            Set.empty
