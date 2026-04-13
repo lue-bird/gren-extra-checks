@@ -187,7 +187,7 @@ type Run
             Array
                 { outline : Compiler.Outline.PkgOutline
                 , modules :
-                    Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+                    Array { syntax : Compiler.Ast.Source.Module, source : String }
                 }
          , addedOrChangedExtraFiles : Array { path : String, source : String }
          , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
@@ -223,7 +223,7 @@ grenJsonPath =
   - `inspectModule`: collect knowledge from module syntax. More info below
   - `inspectGrenJson`: collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#Outline).
     You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
-  - `inspectExtraFile`: collect knowledge from an available files like README.md or CHANGELOG.md that aren't source modules or the gren.json.
+  - `inspectExtraFile`: collect knowledge from an available files like README.md, CHANGELOG.md or package.json that aren't source modules or the gren.json.
     The provided path is relative to the project's `gren.json`
     and can be used as an [`Error`](#Error) target file path
   - `inspectDirectDependencies`: collect knowledge from all [packages](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#PkgOutline)
@@ -312,7 +312,7 @@ create :
     , inspectDirectDependencies :
         Array
             { outline : Compiler.Outline.PkgOutline
-            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
             }
         -> knowledge
     , knowledgeMerge : knowledge -> knowledge -> knowledge
@@ -554,7 +554,7 @@ run :
     Check
     ->
         { grenJson : { source : String, outline : Compiler.Outline.Outline }
-        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }
+        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }
         , addedOrChangedExtraFiles : Array { path : String, source : String }
         , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
         , removedExtraFilePaths : Array String
@@ -1496,6 +1496,7 @@ toCheckResult :
     ->
         { files : Array { path : String, source : String }
         , grenJson : { source : String, outline : Compiler.Outline.Outline }
+        -- TODO instead see if taking the parsed syntax makes sense
         , directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } }
         }
     -> CheckResult
@@ -1531,7 +1532,7 @@ toCheckResult check project =
                 modulesParsed =
                     modulesParsedBuilder |> Array.Builder.toArray
                 
-                directDependenciesParsed : Array { parsed : Maybe { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }, errors : Array String }
+                directDependenciesParsed : Array { parsed : Maybe { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }, errors : Array String }
                 directDependenciesParsed =
                     project.directDependencies
                         |> Array.map
@@ -1544,9 +1545,9 @@ toCheckResult check project =
                                     dependencyModulesResult :
                                         Result
                                             (Array.Builder.Builder String)
-                                            (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+                                            (Array.Builder.Builder { source : String, syntax : Compiler.Ast.Source.Module })
                                     dependencyModulesResult =
-                                        directDependency.modules |> parseModules
+                                        directDependency.modules |> parseDependencyModules
                                 in
                                 when outlineResult is
                                     Ok outline ->
@@ -1675,6 +1676,47 @@ parseModules moduleFiles =
                                         |> Array.Builder.pushLast
                                             { path = moduleUnparsed.path
                                             , source = moduleUnparsed.source
+                                            , syntax = syntax
+                                            }
+                                    )
+
+                            (Err _) as failedToParseSoFar ->
+                                failedToParseSoFar
+            )
+            (Ok (Array.Builder.empty 2))
+
+
+parseDependencyModules :
+    Array { path : String, source : String }
+    ->
+        Result
+            (Array.Builder.Builder String)
+            (Array.Builder.Builder { source : String, syntax : Compiler.Ast.Source.Module })
+parseDependencyModules moduleFiles =
+    moduleFiles
+        |> Array.foldl
+            (\moduleUnparsed soFar ->
+                when moduleUnparsed.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                    Err _ ->
+                        Err
+                            (Array.Builder.pushLast
+                                (moduleFailedToParse { path = moduleUnparsed.path })
+                                (when soFar is
+                                    Ok _ ->
+                                        Array.Builder.empty 1
+
+                                    Err failedToParseSoFar ->
+                                        failedToParseSoFar
+                                )
+                            )
+
+                    Ok syntax ->
+                        when soFar is
+                            Ok parsedSoFar ->
+                                Ok
+                                    (parsedSoFar
+                                        |> Array.Builder.pushLast
+                                            { source = moduleUnparsed.source
                                             , syntax = syntax
                                             }
                                     )

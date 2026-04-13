@@ -1,4 +1,4 @@
-> TODO: polish up the runner, remove path from dependency module info as errors should never be reported there, try optimizing static things like dependency context, consider walking indirect dependencies as well. add helper to traverse expression with introduced local bindings. Consider switching to gren-diff/a port of minibill's elm-diff
+> TODO: polish up the runner, try optimizing static things like dependency context, consider walking indirect dependencies as well. add helper to traverse expression with introduced local bindings. Consider switching to gren-diff/a port of minibill's elm-diff
 
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
 It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter internals.

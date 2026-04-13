@@ -94,7 +94,7 @@ type ProgramState
         , directDependencies :
             Array
                 { outline : Compiler.Outline.PkgOutline
-                , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+                , modules : Array { source : String, syntax : Compiler.Ast.Source.Module }
                 }
         }
 
@@ -114,6 +114,8 @@ type ProgramEvent
 
 {-| Fully assembled command line program to run checks, re-running on file changes.
 Use from a node gren project as the `main`.
+Be aware that if you change the gren.json/dependencies of the project to check
+the program needs to be restarted.
 
 In projects where security is important,
 you can instead assemble the parts that define a [`ExtraChecksRunnerNode.program`](#program) yourself,
@@ -242,7 +244,7 @@ parseCompilerPackage :
     Compiler.Package.Package
     ->
         { outline : Compiler.Outline.PkgOutline
-        , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        , modules : Array { source : String, syntax : Compiler.Ast.Source.Module }
         }
 parseCompilerPackage package =
     { outline = package.outline
@@ -259,8 +261,7 @@ parseCompilerPackage package =
                         Ok syntax ->
                             soFar
                                 |> Array.Builder.pushLast
-                                    { path = path
-                                    , source = source
+                                    { source = source
                                     , syntax = syntax
                                     }
                 )
@@ -285,7 +286,7 @@ initialInfoTask :
                 , directDependencies :
                     Array
                         { outline : Compiler.Outline.PkgOutline
-                        , modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+                        , modules : Array { source : String, syntax : Compiler.Ast.Source.Module }
                         }
                 }
             )
@@ -382,7 +383,7 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                                             |> FileSystem.Path.append
                                                 (FileSystem.Path.fromPosixString extraPath)
                                         )
-                                    |> Task.map (\source -> { path = extraPath, source = source })
+                                        |> Task.map (\source -> { path = extraPath, source = source })
                                 )
                             |> Task.concurrent
                         )
@@ -509,7 +510,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
                                                 , errors = nextFixableErrorOrAllUnfixable
                                                 }
                                     , -- TODO not when outside of interactive shell, auto-reject in that case
-                                    Stream.read environment.stdin |> Task.attempt Typed
+                                      Stream.read environment.stdin |> Task.attempt Typed
                                     ]
                             }
         )
@@ -1282,7 +1283,7 @@ reviewRunList :
     Array ExtraCheck.Check
     ->
         { grenJson : { source : String, outline : Compiler.Outline.Outline }
-        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module } }
+        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }
         , addedOrChangedExtraFiles : Array { path : String, source : String }
         , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
         , removedExtraFilePaths : Array String
