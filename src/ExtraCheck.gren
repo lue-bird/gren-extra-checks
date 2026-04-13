@@ -982,23 +982,21 @@ implicitImports :
         , exposes : Set String -- includes names of variants
         }
 implicitImports =
-    -- TODO update
-    Dict.singleton   "Basics"  
+    Dict.singleton "Basics"  
         { alias = Nothing
         , exposes =
             [ "Int"
-            , "Float"
             , "(+)"
             , "(-)"
             , "(*)"
             , "(/)"
             , "(//)"
             , "(^)"
+            , "negate"
+            , "Float"
             , "toFloat"
-            , "round"
-            , "floor"
-            , "ceiling"
-            , "truncate"
+            , "isNaN"
+            , "isInfinite"
             , "(==)"
             , "(/=)"
             , "(<)"
@@ -1007,6 +1005,7 @@ implicitImports =
             , "(>=)"
             , "max"
             , "min"
+            , "clamp"
             , "compare"
             , "Order"
             , "LT"
@@ -1020,31 +1019,7 @@ implicitImports =
             , "(||)"
             , "xor"
             , "(++)"
-            , "modBy"
-            , "remainderBy"
-            , "negate"
-            , "abs"
-            , "clamp"
-            , "sqrt"
-            , "logBase"
-            , "e"
-            , "pi"
-            , "cos"
-            , "sin"
-            , "tan"
-            , "acos"
-            , "asin"
-            , "atan"
-            , "atan2"
-            , "degrees"
-            , "radians"
-            , "turns"
-            , "toPolar"
-            , "fromPolar"
-            , "isNaN"
-            , "isInfinite"
             , "identity"
-            , "always"
             , "(<|)"
             , "(|>)"
             , "(<<)"
@@ -1054,12 +1029,11 @@ implicitImports =
             ]
                 |> SetLocalExtra.fromList
         }
-    |> Dict.set "Array" { alias = Nothing, exposes = SetLocalExtra.fromList [ "(::)", "Array" ] }
+    |> Dict.set "Array" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Array" ] }
     |> Dict.set "Maybe" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Maybe", "Just", "Nothing" ] }
     |> Dict.set "Result" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Result", "Ok", "Err" ] }
     |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
     |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
-    |> Dict.set "Tuple" { alias = Nothing, exposes = Set.empty }
     |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
     |> Dict.set "Platform" { alias = Nothing, exposes = Set.singleton "Program" }
     |> Dict.set "Platform.Cmd" { alias = Just "Cmd", exposes = Set.singleton "Cmd" }
