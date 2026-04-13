@@ -8,7 +8,7 @@ module ExtraCheck exposing
     , moduleExposes, exposedArrayToExposes
     , sourceExtractInRange, sourceRegionsOf
     , outlineExposedModuleNameSet
-    , test, applicationConfigurationMinimal, ExpectedErrorRange(..)
+    , expectToReport, applicationConfigurationMinimal, ExpectedErrorRange(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
     )
 
@@ -92,7 +92,7 @@ recreate the rule you are testing.
 Tests are cheap and it is better to have too many tests rather than too few,
 since the behavior of a check rarely changes drastically.
 
-@docs test, applicationConfigurationMinimal, ExpectedErrorRange
+@docs expectToReport, applicationConfigurationMinimal, ExpectedErrorRange
 
 
 # running
@@ -1348,21 +1348,21 @@ with your provided expected errors.
         Test.describe "DebugForbid"
             [ Test.test "report Debug.log use"
                 (\{} ->
-                    ExtraCheck.test
-                        { files =
-                            [ { path = "src/A.gren"
-                              , source =
-                                    """
-                                    module A exposing (a)
-                                    import Html
-                                    a =
-                                        Debug.log "some" "message"
-                                    """
-                              }
-                            ]
-                        , projectConfiguration = ExtraCheck.applicationConfigurationMinimal
-                        , check = DebugForbid.check
-                        , expectedErrors =
+                    { check = DebugForbid.check
+                    , projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                            , source =
+                                """
+                                module A exposing (a)
+                                import Html
+                                a =
+                                    Debug.log "some" "message"
+                                """
+                            }
+                        ]
+                    }
+                        |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "Remove the use of `Debug` before shipping to production"
                               , details = [ "Compiling gren code in optimized mode does not allow these helpers." ]
@@ -1379,39 +1379,42 @@ with your provided expected errors.
                                     ]
                               }
                             ]
-                        }
                 )
             ]
 
-The extra indentation specified by the first line will be stripped of all the provided source strings.
+To expect no errors, use `... |> expectToReport []`.
 
 You can also specify a custom project config for when you want to test a package, use a custom gren.json
 or add dependencies by supplying the raw sources for the `gren.json` and the direct dependency modules
 (the most common gren-lang/core modules are automatically part of every tested project).
 
+If you find that these tests are overly verbose, I encourage you to create local
+helpers. I personally prefer that over exposing these from the ExtraCheck module,
+as trying to make assumptions about your most common test scenarios seems questionable to me.
+
 -}
-test :
-    { files : Array { path : String, source : String }
-    , projectConfiguration :
-        { grenJson : String
-        , directDependencies :
-            Array
-                { outline : Compiler.Outline.PkgOutline
-                , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
-                }
+expectToReport :
+    Array
+        { path : String
+        , message : String
+        , details : Array String
+        , region : ExpectedErrorRange
+        , fixedFiles : Array { path : String, source : String }
         }
-    , check : Check
-    , expectedErrors :
-        Array
-            { path : String
-            , message : String
-            , details : Array String
-            , region : ExpectedErrorRange
-            , fixedFiles : Array { path : String, source : String }
+    ->
+        { check : Check
+        , projectConfiguration :
+            { grenJson : String
+            , directDependencies :
+                Array
+                    { outline : Compiler.Outline.PkgOutline
+                    , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+                    }
             }
-    }
+        , files : Array { path : String, source : String }
+        }
     -> Expect.Expectation
-test config =
+expectToReport expectedErrors config =
     when config.projectConfiguration.grenJson |> Json.Decode.decodeString Compiler.Outline.jsonDecoder is
         Err grenJsonParseError ->
             [ grenJsonParseError |> grenJsonParsingFailure ] |> expectationsViolated
@@ -1420,7 +1423,7 @@ test config =
             let
                 expectedErrorsByPath : Array { path : String, errors : Array ExpectedFileError }
                 expectedErrorsByPath =
-                    config.expectedErrors
+                    expectedErrors
                         |> Array.foldl
                             (\error soFar ->
                                 soFar
@@ -1457,7 +1460,6 @@ test config =
                 toCheckResult config.check
                     { files = config.files
                     , directDependencies =
-                        -- possible optimization: do not reparse for each test
                         config.projectConfiguration.directDependencies
                             |> Array.pushLast
                                 { outline = GrenCoreDependency.outline, modules = GrenCoreDependency.modules }
@@ -1576,7 +1578,7 @@ toCheckResult check project =
                                     )
                             )
             in
-            fileErrors |> Ok
+            Ok fileErrors
 
 
 parseModules :
@@ -1820,7 +1822,7 @@ unknownFilesInExpectedErrors path =
         )
 
 
-expectErrors : Dict String String -> Array { path : String, errors : Array ExpectedFileError } -> (CheckResult -> Expect.Expectation)
+expectErrors : Dict String String -> Array { path : String, errors : Array ExpectedFileError } -> CheckResult -> Expect.Expectation
 expectErrors sourceByPath expectationsList reviewResult =
     when reviewResult is
         Err errors ->
@@ -2019,18 +2021,20 @@ expectErrorsMatch toCheckForMatchingErrors =
                 Expect.pass
 
             else
-                tooManyErrors
-                    toCheckForMatchingErrors.runResult.path
-                    toCheckForMatchingErrors.reviewErrors
-                    |> Expect.fail
+                Expect.fail
+                    (tooManyErrors
+                        toCheckForMatchingErrors.runResult.path
+                        toCheckForMatchingErrors.reviewErrors
+                    )
 
         Just { first = expected, rest = restOfExpectedErrors } ->
             when toCheckForMatchingErrors.reviewErrors |> Array.popFirst is
                 Nothing ->
-                    toCheckForMatchingErrors.expected
-                        |> Array.map expectedErrorForMessage
-                        |> tooFewErrors toCheckForMatchingErrors.runResult.path
-                        |> Expect.fail
+                    Expect.fail
+                        (toCheckForMatchingErrors.expected
+                            |> Array.map expectedErrorForMessage
+                            |> tooFewErrors toCheckForMatchingErrors.runResult.path
+                        )
 
                 Just { first = reviewError, rest = restOfErrors } ->
                     Expect.all

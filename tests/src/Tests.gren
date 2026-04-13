@@ -26,23 +26,22 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "Debug.log is used"
-                          , details =
-                                [ """
-                                  Debug.log is a quick and dirty way to display a value in the console
-                                  and can for example be used to inspect private (opaque) types.
-                                  It's nothing a published product should make use of.
-                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                  """
-                                ]
-                          , region = ExtraCheck.ExpectUnder "Debug.log"
-                          , fixedFiles = []
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "Debug.log is used"
+                              , details =
+                                    [ """
+                                      Debug.log is a quick and dirty way to display a value in the console
+                                      and can for example be used to inspect private (opaque) types.
+                                      It's nothing a published product should make use of.
+                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                      """
+                                    ]
+                              , region = ExtraCheck.ExpectUnder "Debug.log"
+                              , fixedFiles = []
+                              }
+                            ]
                 )
             , Test.test "fully qualified Debug.log from explicit import"
                 (\{} ->
@@ -58,23 +57,22 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "Debug.log is used"
-                          , details =
-                                [ """
-                                  Debug.log is a quick and dirty way to display a value in the console
-                                  and can for example be used to inspect private (opaque) types.
-                                  It's nothing a published product should make use of.
-                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                  """
-                                ]
-                          , region = ExtraCheck.ExpectUnder "Debug.log"
-                          , fixedFiles = []
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "Debug.log is used"
+                              , details =
+                                    [ """
+                                      Debug.log is a quick and dirty way to display a value in the console
+                                      and can for example be used to inspect private (opaque) types.
+                                      It's nothing a published product should make use of.
+                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                      """
+                                    ]
+                              , region = ExtraCheck.ExpectUnder "Debug.log"
+                              , fixedFiles = []
+                              }
+                            ]
                 )
             , Test.test "qualified Debug.log using import alias"
                 (\{} ->
@@ -90,23 +88,22 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "Debug.log is used"
-                          , details =
-                                [ """
-                                  Debug.log is a quick and dirty way to display a value in the console
-                                  and can for example be used to inspect private (opaque) types.
-                                  It's nothing a published product should make use of.
-                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                  """
-                                ]
-                          , region = ExtraCheck.ExpectUnder "Dbg.log"
-                          , fixedFiles = []
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "Debug.log is used"
+                              , details =
+                                    [ """
+                                      Debug.log is a quick and dirty way to display a value in the console
+                                      and can for example be used to inspect private (opaque) types.
+                                      It's nothing a published product should make use of.
+                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                      """
+                                    ]
+                              , region = ExtraCheck.ExpectUnder "Dbg.log"
+                              , fixedFiles = []
+                              }
+                            ]
                 )
             , Test.test "Debug.log where Debug points to a different module"
                 (\{} ->
@@ -123,9 +120,8 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors = []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                 )
             , Test.test "unqualified Debug.log using explicit import expose"
                 (\{} ->
@@ -141,25 +137,24 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "Debug.log is used"
-                          , details =
-                                [ """
-                                  Debug.log is a quick and dirty way to display a value in the console
-                                  and can for example be used to inspect private (opaque) types.
-                                  It's nothing a published product should make use of.
-                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                  """
-                                ]
-                          , region =
-                                ExtraCheck.ExpectUnderExactly
-                                    { section = "log", startingAt = { row = 3, col = 5 } }
-                          , fixedFiles = []
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "Debug.log is used"
+                              , details =
+                                    [ """
+                                      Debug.log is a quick and dirty way to display a value in the console
+                                      and can for example be used to inspect private (opaque) types.
+                                      It's nothing a published product should make use of.
+                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                      """
+                                    ]
+                              , region =
+                                    ExtraCheck.ExpectUnderExactly
+                                        { section = "log", startingAt = { row = 3, col = 5 } }
+                              , fixedFiles = []
+                              }
+                            ]
                 )
             , Test.test "unqualified log referring to module-level variable, not explicit import expose"
                 (\{} ->
@@ -176,9 +171,8 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors = []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                 )
             , Test.test "unqualified log referring to local variable, not explicit import expose"
                 (\{} ->
@@ -194,9 +188,8 @@ tests =
                           }
                         ]
                     , check = DebugIsNotUsed.check
-                    , expectedErrors = []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                 )
             ]
         , Test.describe "StringSpellsCompanyNameCorrectly"
@@ -214,9 +207,8 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors = []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                 )
             , Test.test "frits.com in string is reported"
                 (\{} ->
@@ -232,25 +224,24 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "misspelled fruits.com"
-                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
-                          , region = ExtraCheck.ExpectUnder "frits.com"
-                          , fixedFiles =
-                                [ { path = "src/A.gren"
-                                  , source = """
-                                        module A exposing (a)
-                                        
-                                        a =
-                                            "the name is obviously fruits.com"
-                                        """
-                                  }
-                                ]
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "misspelled fruits.com"
+                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , region = ExtraCheck.ExpectUnder "frits.com"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source = """
+                                            module A exposing (a)
+                                            
+                                            a =
+                                                "the name is obviously fruits.com"
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
                 )
             , Test.test "(should fail because module source doesn't parse) fruits.com in string is accepted"
                 (\{} ->
@@ -266,10 +257,8 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                         |> expectExpectationFail
                 )
             , Test.test "(should fail because missing errors) frits.com in string is reported"
@@ -286,10 +275,8 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        []
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport []
                         |> expectExpectationFail
                 )
             , Test.test "(should fail because missing fixes) frits.com in string is reported"
@@ -306,16 +293,15 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "misspelled fruits.com"
-                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
-                          , region = ExtraCheck.ExpectUnder "frits.com"
-                          , fixedFiles = []
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "misspelled fruits.com"
+                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , region = ExtraCheck.ExpectUnder "frits.com"
+                              , fixedFiles = []
+                              }
+                            ]
                         |> expectExpectationFail
                 )
             , Test.test "(should fail because incorrect range) frits.com in string is reported"
@@ -332,25 +318,24 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "misspelled fruits.com"
-                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
-                          , region = ExtraCheck.ExpectUnder "\"the name is obviously frits.com\""
-                          , fixedFiles =
-                                [ { path = "src/A.gren"
-                                  , source = """
-                                        module A exposing (a)
-                                        
-                                        a =
-                                            "the name is obviously fruits.com"
-                                        """
-                                  }
-                                ]
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "misspelled fruits.com"
+                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , region = ExtraCheck.ExpectUnder "\"the name is obviously frits.com\""
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source = """
+                                            module A exposing (a)
+                                            
+                                            a =
+                                                "the name is obviously fruits.com"
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
                         |> expectExpectationFail
                 )
             , Test.test "(should fail because fixed module source doesn't parse) frits.com in string is reported"
@@ -367,25 +352,24 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "misspelled fruits.com"
-                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
-                          , region = ExtraCheck.ExpectUnder "frits.com"
-                          , fixedFiles =
-                                [ { path = "src/A.gren"
-                                  , source = """
-                                        module A exposing (a)
-                                        
-                                        a =
-                                            "the name is obviously fruits.com
-                                        """
-                                  }
-                                ]
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "misspelled fruits.com"
+                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , region = ExtraCheck.ExpectUnder "frits.com"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source = """
+                                            module A exposing (a)
+                                            
+                                            a =
+                                                "the name is obviously fruits.com
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
                         |> expectExpectationFail
                 )
             , Test.test "(should fail because fixed module source doesn't match) frits.com in string is reported"
@@ -402,25 +386,24 @@ tests =
                           }
                         ]
                     , check = StringSpellsCompanyNameCorrectly.check
-                    , expectedErrors =
-                        [ { path = "src/A.gren"
-                          , message = "misspelled fruits.com"
-                          , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
-                          , region = ExtraCheck.ExpectUnder "frits.com"
-                          , fixedFiles =
-                                [ { path = "src/A.gren"
-                                  , source = """
-                                        module A exposing (a)
-                                        
-                                        a =
-                                            "the name is obviously fruity.com"
-                                        """
-                                  }
-                                ]
-                          }
-                        ]
                     }
-                        |> ExtraCheck.test
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "misspelled fruits.com"
+                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , region = ExtraCheck.ExpectUnder "frits.com"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source = """
+                                            module A exposing (a)
+                                            
+                                            a =
+                                                "the name is obviously fruity.com"
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
                         |> expectExpectationFail
                 )
             ]
