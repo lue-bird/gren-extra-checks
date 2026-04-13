@@ -29,7 +29,6 @@ import Compiler.Ast.Source
 import DictLocalExtra
 import Ansi
 import Diff
-import Unicode
 import Array.Builder
 import String.Parser.Advanced
 import Compiler.Parse.Module
@@ -1708,7 +1707,7 @@ codeExtract source region =
             startLineContent
                 |> withErrorHighlightedRange
                     { start = region.start.col
-                    , end = (startLineContent |> Unicode.length) + 1
+                    , end = (startLineContent |> String.count) + 1
                     }
           ]
             |> Array.keepIf (\l -> not (l |> String.isEmpty))
@@ -1744,14 +1743,14 @@ getIndexOfFirstNonSpace string =
 
 withErrorHighlightedRange : { start : Int, end : Int } -> (String -> String)
 withErrorHighlightedRange lineRange lineContent =
-    (lineContent |> Unicode.takeFirst (lineRange.start - 1))
+    (lineContent |> String.takeFirst (lineRange.start - 1))
         ++ (lineContent
-                |> Unicode.dropFirst (lineRange.start - 1)
-                |> Unicode.takeFirst (lineRange.end - lineRange.start)
+                |> String.dropFirst (lineRange.start - 1)
+                |> String.takeFirst (lineRange.end - lineRange.start)
                 |> Ansi.backgroundRed
            )
         ++ (lineContent
-                |> Unicode.dropFirst
+                |> String.dropFirst
                     (lineRange.start - 1 + lineRange.end - lineRange.start)
            )
 

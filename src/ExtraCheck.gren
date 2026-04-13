@@ -110,10 +110,7 @@ import GrenCoreDependency
 import Expect
 import DictLocalExtra
 import Json.Decode
-import ArrayLocalExtra
 import Set exposing (Set)
-import SetLocalExtra
-import Unicode
 import SourcePosition
 import Compiler.Ast.Source
 import Array.Builder
@@ -596,13 +593,14 @@ This can be nice to keep the user's formatting if you just move code around
 -}
 sourceExtractInRange : SourcePosition.Region -> String -> String
 sourceExtractInRange region string =
+    -- can be optimized
     string
         |> String.lines
         |> Array.dropFirst (region.start.row - 1)
         |> Array.takeFirst (region.end.row - region.start.row + 1)
-        |> ArrayLocalExtra.lastMap (Unicode.takeFirst (region.end.col - 1))
+        |> arrayLastMap (\line -> line |> String.takeFirst (region.end.col - 1))
         |> String.join "\n"
-        |> Unicode.dropFirst (region.start.col - 1)
+        |> String.dropFirst (region.start.col - 1)
 
 
 {-| Find all occurrences of a given section in the source in the when you
@@ -613,7 +611,7 @@ sourceRegionsOf sectionToFind source =
     let
         sectionToFindLength : Int
         sectionToFindLength =
-            sectionToFind |> Unicode.length
+            sectionToFind |> String.count
     in
     source
         |> String.indices sectionToFind
@@ -630,7 +628,7 @@ sourceOffsetToLocationIn source sourceOffset =
     let
         lines : Array String
         lines =
-            source |> Unicode.takeFirst sourceOffset |> String.lines
+            source |> String.takeFirst sourceOffset |> String.lines
     in
     { row = lines |> Array.length
     , col =
@@ -639,7 +637,7 @@ sourceOffsetToLocationIn source sourceOffset =
                 1
 
             Just lastLine ->
-                (lastLine |> Unicode.length) + 1
+                (lastLine |> String.count) + 1
     }
 
 
@@ -649,7 +647,7 @@ outlineExposedModuleNameSet : Compiler.Outline.Exposed -> Set String
 outlineExposedModuleNameSet exposed =
     when exposed is 
         Compiler.Outline.ExposedArray array ->
-            array |> SetLocalExtra.fromListMap Compiler.ModuleName.toString
+            array |> setFromListMap Compiler.ModuleName.toString
 
         Compiler.Outline.ExposedDict dict ->
             dict
@@ -690,7 +688,7 @@ moduleExposes syntaxFile =
                         soFar
                             |> Dict.set choiceTypeDeclaration.value.value.name.value
                                 (choiceTypeDeclaration.value.value.variants
-                                    |> SetLocalExtra.fromListMap
+                                    |> setFromListMap
                                         (\variant -> variant.value.name.value)
                                 )
                     )
@@ -1027,11 +1025,11 @@ implicitImports =
             , "Never"
             , "never"
             ]
-                |> SetLocalExtra.fromList
+                |> setFromList
         }
-    |> Dict.set "Array" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Array" ] }
-    |> Dict.set "Maybe" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Maybe", "Just", "Nothing" ] }
-    |> Dict.set "Result" { alias = Nothing, exposes = SetLocalExtra.fromList [ "Result", "Ok", "Err" ] }
+    |> Dict.set "Array" { alias = Nothing, exposes = setFromList [ "Array" ] }
+    |> Dict.set "Maybe" { alias = Nothing, exposes = setFromList [ "Maybe", "Just", "Nothing" ] }
+    |> Dict.set "Result" { alias = Nothing, exposes = setFromList [ "Result", "Ok", "Err" ] }
     |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
     |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
     |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
@@ -1182,20 +1180,20 @@ applyFixSingle fixToApply lines =
                     lines
                         |> Array.get (replace.region.start.row - 1)
                         |> Maybe.withDefault ""
-                        |> Unicode.takeFirst (replace.region.start.col - 1)
+                        |> String.takeFirst (replace.region.start.col - 1)
 
                 endLine : String
                 endLine =
                     lines
                         |> Array.get (replace.region.end.row - 1)
                         |> Maybe.withDefault ""
-                        |> Unicode.dropFirst (replace.region.end.col - 1)
+                        |> String.dropFirst (replace.region.end.col - 1)
             in
             linesBefore
                 ++ (replace.replacement
                         |> String.lines
                         |> Array.update 0 (\replacementFirstLine -> startLine ++ replacementFirstLine)
-                        |> ArrayLocalExtra.lastMap (\replacementLastLine -> replacementLastLine ++ endLine)
+                        |> arrayLastMap (\replacementLastLine -> replacementLastLine ++ endLine)
                    )
                 ++ linesAfter
 
@@ -1203,7 +1201,7 @@ applyFixSingle fixToApply lines =
 sourceEditsContainRangeCollisions : Array SourceEdit -> Bool
 sourceEditsContainRangeCollisions fixes =
     fixes
-        |> ArrayLocalExtra.anyPair
+        |> arrayAnyPair
             (\edit0 edit1 ->
                 rangesCollide (edit0 |> fixRange) (edit1 |> fixRange)
             )
@@ -1707,7 +1705,7 @@ invalidExpectedErrorsIn project expectedErrors =
 
         projectPathsExceptGrenJson : Set String
         projectPathsExceptGrenJson =
-            project.files |> SetLocalExtra.fromListMap .path
+            project.files |> setFromListMap .path
 
         pathIsModule : String -> Bool
         pathIsModule path =
@@ -2302,7 +2300,7 @@ checkFixesAreCorrect toCheck =
         (\path _ soFar -> soFar |> Array.Builder.pushLast (missingSourceEditsForFile path toCheck.expected))
         (\path expectedFixedSource reviewEdits soFar ->
             soFar
-                |> ArrayLocalExtra.builderPushLastJust
+                |> arrayBuilderPushLastJust
                     (checkFileFixesAreCorrect
                         toCheck.expected
                         (toCheck.sourceByPath |> Dict.get path |> Maybe.withDefault "")
@@ -2763,3 +2761,47 @@ expressionImmediateSubsFold reduce initialState parentExpression =
                     )
 
 
+setFromList : Array comparableElement -> Set comparableElement
+setFromList list =
+    list
+        |> Array.foldl
+            (\element acc -> acc |> Set.set element)
+            Set.empty
+
+
+setFromListMap : (element -> comparableElement) -> Array element -> Set comparableElement
+setFromListMap toComparable list =
+    list
+        |> Array.foldl
+            (\element acc ->
+                acc |> Set.set (element |> toComparable)
+            )
+            Set.empty
+
+arrayLastMap : (a -> a) -> Array a -> Array a
+arrayLastMap mapper array =
+    array |> Array.update ((array |> Array.length) - 1) mapper
+
+
+arrayBuilderPushLastJust : Maybe a -> Array.Builder.Builder a -> Array.Builder.Builder a
+arrayBuilderPushLastJust maybeNewLast list =
+    when maybeNewLast is
+        Nothing ->
+            list
+
+        Just newLast ->
+            Array.Builder.pushLast newLast list
+
+
+arrayAnyPair : (element -> element -> Bool) -> Array element -> Bool
+arrayAnyPair isFound array =
+    when array |> Array.popLast is
+        Nothing ->
+            False
+
+        Just { last, initial } ->
+            if Array.any (\tailElement -> isFound last tailElement) initial then
+                True
+
+            else
+                arrayAnyPair isFound initial
