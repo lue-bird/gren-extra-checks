@@ -554,7 +554,11 @@ run :
     Check
     ->
         { grenJson : { source : String, outline : Compiler.Outline.Outline }
-        , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }
+        , directDependencies :
+            Array
+                { outline : Compiler.Outline.PkgOutline
+                , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+                }
         , addedOrChangedExtraFiles : Array { path : String, source : String }
         , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
         , removedExtraFilePaths : Array String
@@ -1282,7 +1286,14 @@ Equivalent to (copy and adapt if necessary)
 (the most common gren-lang/core modules are automatically part of every tested project)
 
 -}
-applicationConfigurationMinimal : { grenJson : String, directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } } }
+applicationConfigurationMinimal :
+    { grenJson : String
+    , directDependencies :
+        Array
+            { outline : Compiler.Outline.PkgOutline
+            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+            }
+    }
 applicationConfigurationMinimal =
     { grenJson =
         """
@@ -1353,7 +1364,7 @@ expectationsViolated errors =
         Expect.fail (errors |> String.join "\n\n\n\n")
 
 
-{-| Run a `ExtraCheck` on a project, matching all reported module errors, `gren.json` errors and extra file errors
+{-| Run a [`Check`](#Check) on a project, matching all reported module errors, `gren.json` errors and extra file errors
 with your provided expected errors.
 
     import DebugForbid
@@ -1410,7 +1421,13 @@ or add dependencies by supplying the raw sources for the `gren.json` and the dir
 test :
     { files : Array { path : String, source : String }
     , projectConfiguration :
-        { grenJson : String, directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } } }
+        { grenJson : String
+        , directDependencies :
+            Array
+                { outline : Compiler.Outline.PkgOutline
+                , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+                }
+        }
     , check : Check
     , expectedErrors :
         Array
@@ -1471,7 +1488,7 @@ test config =
                         -- possible optimization: do not reparse for each test
                         config.projectConfiguration.directDependencies
                             |> Array.pushLast
-                                { grenJson = GrenCoreDependency.grenJson, modules = GrenCoreDependency.modulePathsAndSources }
+                                { outline = GrenCoreDependency.outline, modules = GrenCoreDependency.modules }
                     , grenJson = { source = config.projectConfiguration.grenJson, outline = outline }
                     }
                     |> expectErrors sourceByPath expectedErrorsByPath
@@ -1496,8 +1513,11 @@ toCheckResult :
     ->
         { files : Array { path : String, source : String }
         , grenJson : { source : String, outline : Compiler.Outline.Outline }
-        -- TODO instead see if taking the parsed syntax makes sense
-        , directDependencies : Array { grenJson : String, modules : Array { path : String, source : String } }
+        , directDependencies :
+            Array
+                { outline : Compiler.Outline.PkgOutline
+                , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+                }
         }
     -> CheckResult
 toCheckResult check project =
@@ -1531,117 +1551,60 @@ toCheckResult check project =
             let
                 modulesParsed =
                     modulesParsedBuilder |> Array.Builder.toArray
-                
-                directDependenciesParsed : Array { parsed : Maybe { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }, errors : Array String }
-                directDependenciesParsed =
-                    project.directDependencies
+
+                runErrorsByPath : Dict String (Array FileCheckError)
+                runErrorsByPath =
+                    { grenJson = project.grenJson
+                    , directDependencies = project.directDependencies
+                    , addedOrChangedExtraFiles = extraFiles
+                    , addedOrChangedModules = modulesParsed
+                    , removedExtraFilePaths = []
+                    , removedModulePaths = []
+                    }
+                        |> run check
+                        |> .errorsByPath
+
+                fileErrors : Array SuccessfulRunResult
+                fileErrors =
+                    (modulesParsed
                         |> Array.map
-                            (\directDependency ->
-                                let
-                                    outlineResult : Result Json.Decode.Error Compiler.Outline.PkgOutline
-                                    outlineResult =
-                                        directDependency.grenJson |> Json.Decode.decodeString Compiler.Outline.pkgJsonDecoder
-
-                                    dependencyModulesResult :
-                                        Result
-                                            (Array.Builder.Builder String)
-                                            (Array.Builder.Builder { source : String, syntax : Compiler.Ast.Source.Module })
-                                    dependencyModulesResult =
-                                        directDependency.modules |> parseDependencyModules
-                                in
-                                when outlineResult is
-                                    Ok outline ->
-                                        when dependencyModulesResult is
-                                            Ok dependencyModulesParsed ->
-                                                { parsed = Just { outline = outline, modules = dependencyModulesParsed |> Array.Builder.toArray }
-                                                , errors = []
-                                                }
-
-                                            Err parseErrors ->
-                                                { parsed = Nothing
-                                                , errors = parseErrors |> Array.Builder.toArray
-                                                }
-
-                                    Err grenJsonParseError ->
-                                        when dependencyModulesResult is
-                                            Ok _ ->
-                                                { parsed = Nothing
-                                                , errors = [ dependencyGrenJsonParsingFailure grenJsonParseError ]
-                                                }
-
-                                            Err parseErrors ->
-                                                { parsed = Nothing
-                                                , errors =
-                                                    parseErrors
-                                                        |> Array.Builder.pushLast
-                                                            (dependencyGrenJsonParsingFailure grenJsonParseError)
-                                                        |> Array.Builder.toArray
-                                                }
+                            (\module_ ->
+                                { path = module_.path
+                                , source = module_.source
+                                , errors =
+                                    runErrorsByPath
+                                        |> Dict.get module_.path
+                                        |> Maybe.withDefault []
+                                }
                             )
-                
-                directDependenciesParseErrors =
-                    directDependenciesParsed |> Array.mapAndFlatten .errors
-            in
-            if Basics.not (Array.isEmpty directDependenciesParseErrors) then
-                Err directDependenciesParseErrors
+                    )
+                        ++ (when runErrorsByPath |> Dict.get "gren.json" is
+                                Just errorsForGrenJson ->
+                                    [ { path = "gren.json"
+                                        , source = project.grenJson.source
+                                        , errors = errorsForGrenJson
+                                        }
+                                    ]
 
-            else
-                let
-                    runErrorsByPath : Dict String (Array FileCheckError)
-                    runErrorsByPath =
-                        { grenJson = project.grenJson
-                        , directDependencies =
-                            directDependenciesParsed
-                                |> Array.mapAndKeepJust .parsed
-                        , addedOrChangedExtraFiles = extraFiles
-                        , addedOrChangedModules = modulesParsed
-                        , removedExtraFilePaths = []
-                        , removedModulePaths = []
-                        }
-                            |> run check
-                            |> .errorsByPath
-
-                    fileErrors : Array SuccessfulRunResult
-                    fileErrors =
-                        (modulesParsed
-                            |> Array.map
-                                (\module_ ->
-                                    { path = module_.path
-                                    , source = module_.source
-                                    , errors =
+                                Nothing ->
+                                    []
+                            )
+                        ++ (extraFiles
+                                |> Array.mapAndKeepJust
+                                    (\extraFile ->
                                         runErrorsByPath
-                                            |> Dict.get module_.path
-                                            |> Maybe.withDefault []
-                                    }
-                                )
-                        )
-                            ++ (when runErrorsByPath |> Dict.get "gren.json" is
-                                    Just errorsForGrenJson ->
-                                        [ { path = "gren.json"
-                                            , source = project.grenJson.source
-                                            , errors = errorsForGrenJson
-                                            }
-                                        ]
-
-                                    Nothing ->
-                                        []
-                                )
-                            ++ (extraFiles
-                                    |> Array.mapAndKeepJust
-                                        (\extraFile ->
-                                            runErrorsByPath
-                                                |> Dict.get extraFile.path
-                                                |> Maybe.map
-                                                    (\errorsForExtraFile ->
-                                                        { path = extraFile.path
-                                                        , source = extraFile.source
-                                                        , errors = errorsForExtraFile
-                                                        }
-                                                    )
-                                        )
-                                )
-                in
-                fileErrors |> Ok
+                                            |> Dict.get extraFile.path
+                                            |> Maybe.map
+                                                (\errorsForExtraFile ->
+                                                    { path = extraFile.path
+                                                    , source = extraFile.source
+                                                    , errors = errorsForExtraFile
+                                                    }
+                                                )
+                                    )
+                            )
+            in
+            fileErrors |> Ok
 
 
 parseModules :
@@ -1997,10 +1960,10 @@ reorderErrors reorderState =
                         }
 
 
-arrayRemoveFirstMember : a -> (Array a -> Array a)
+arrayRemoveFirstMember : a -> Array a -> Array a
 arrayRemoveFirstMember elementToRemove list =
     -- IGNORE TCO
-    -- TODO optimize
+    -- TODO optimize by finding the index, then removing it
     when list |> Array.popFirst is
         Nothing ->
             []

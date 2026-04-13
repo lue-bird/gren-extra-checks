@@ -1,4 +1,4 @@
-module GrenCoreDependency exposing (grenJson, modulePathsAndSources)
+module GrenCoreDependency exposing (outline, modules)
     
 {- contains parts of the source code of gren-lang/core
 in the multiline string literals. gren-lang/core is licensed under:
@@ -33,15 +33,9 @@ import Compiler.License
 import SemanticVersionRange
 import Dict
 import Compiler.PackageName
+
     
-    
-modulePathsAndSources : Array { source : String, path : String }
-modulePathsAndSources =
-    modules
-        |> Array.map (\mod -> { path = mod.path, source = mod.source })
-    
-    
-modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
 modules =
     -- should probably also add Debug, Platform, Platform.Cmd, Platform.Sub
     [ basicsSource, arraySource, maybeSource, resultSource, charSource, stringSource ]
@@ -53,13 +47,37 @@ modules =
                     |> Maybe.map
                         (\syntax ->
                             { source = source
-                            , path = "src/" ++ (syntax.name.value |> String.replace "." "/") ++ ".gren"
                             , syntax = syntax
                             }
                         )
             )
-    
-grenJson =
+
+
+outline : Compiler.Outline.PkgOutline
+outline =
+    grenJsonSource
+        |> Json.Decode.decodeString Compiler.Outline.pkgJsonDecoder
+        |> Result.withDefaultLazy
+            (\_ ->
+                -- dummy
+                { platform = Compiler.Platform.Common
+                , name = Compiler.PackageName.core
+                , summary = "Gren's core modules"
+                , license = Compiler.License.bsd3
+                , version = { major = 7, minor = 4, patch = 0 }
+                , exposedModules =
+                    Compiler.Outline.ExposedDict
+                        -- module names cannot be constructed safely :(
+                        Dict.empty
+                , grenVersion =
+                    SemanticVersionRange.compatibleWith
+                        { major = 0, minor = 6, patch = 0 }
+                , dependencies = Dict.empty
+                }
+            )
+
+
+grenJsonSource =
     """
     {
         "type": "package",
