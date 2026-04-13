@@ -59,10 +59,8 @@ E.g. to find all `as` pattern regions
                         []
                )
 
-In practice you should use an Array.Builder instead of Array here.
+(In practice you should use an Array.Builder instead of Array here.)
 This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
-
-TODO add helper to traverse pattern and type and expression with introduced local bindings sub-AST located nodes
 
 @docs expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
 @docs determineModuleOrigin, importsToExplicit
@@ -312,9 +310,9 @@ create :
         { source : String, outline : Compiler.Outline.Outline } -> knowledge
     , inspectExtraFile : { path : String, source : String } -> knowledge
     , inspectDirectDependencies :
-        Array.Array
+        Array
             { outline : Compiler.Outline.PkgOutline
-            , modules : Array.Array { syntax : Compiler.Ast.Source.Module, source : String.String, path : String.String }
+            , modules : Array { syntax : Compiler.Ast.Source.Module, source : String, path : String }
             }
         -> knowledge
     , knowledgeMerge : knowledge -> knowledge -> knowledge
@@ -323,162 +321,115 @@ create :
     -> Check
 create check =
     let
-        knowledgesFoldMapToMaybe : (element -> knowledge) -> Array element -> Maybe knowledge
-        knowledgesFoldMapToMaybe elementToKnowledge knowledges =
-            when knowledges |> Array.popLast is
-                Nothing ->
-                    Nothing
-
-                Just { last = one, initial = others } ->
-                    others
-                        |> Array.foldl
-                            (\element soFar ->
-                                soFar |> check.knowledgeMerge (element |> elementToKnowledge)
-                            )
-                            (one |> elementToKnowledge)
-                        |> Just
-
-        moduleToKnowledge :
-            { path : String, source : String, syntax : Compiler.Ast.Source.Module }
-            -> { path : String, knowledge : knowledge }
-        moduleToKnowledge moduleFile =
-            -- TODO inline
-            { path = moduleFile.path
-            , knowledge = check.inspectModule moduleFile
-            }
-
         runWithCache : Cache knowledge -> Run
         runWithCache cache =
-            -- IGNORE TCO
             Run
                 (\project ->
                     let
                         grenJsonKnowledgeAndCache : knowledge
                         grenJsonKnowledgeAndCache =
-                            when cache.grenJsonKnowledge is
-                                Just grenJsonKnowledgeCache ->
-                                    grenJsonKnowledgeCache
-
-                                Nothing ->
-                                    check.inspectGrenJson project.grenJson
+                            cache.grenJsonKnowledge
+                                |> Maybe.withDefaultLazy
+                                    (\{} -> check.inspectGrenJson project.grenJson)
 
                         directDependenciesKnowledgeAndCache : knowledge
                         directDependenciesKnowledgeAndCache =
-                            when cache.directDependenciesKnowledge is
-                                Just knowledge ->
-                                    knowledge
+                            cache.directDependenciesKnowledge
+                                |> Maybe.withDefaultLazy
+                                    (\{} -> check.inspectDirectDependencies project.directDependencies)
 
-                                Nothing ->
-                                    check.inspectDirectDependencies project.directDependencies
-
-                        moduleKnowledges : Array { path : String, knowledge : knowledge }
+                        moduleKnowledges : Dict String knowledge
                         moduleKnowledges =
+                            -- can be optimized
                             Dict.merge
-                                (\_ new soFar -> soFar |> Array.Builder.pushLast new)
-                                (\_ new _ soFar -> soFar |> Array.Builder.pushLast new)
+                                (\_ new soFar -> soFar |> Dict.set new.path new.knowledge)
+                                (\_ new _ soFar -> soFar |> Dict.set new.path new.knowledge)
                                 (\path knowledgeCache soFar ->
-                                    soFar
-                                        |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache } 
+                                    soFar |> Dict.set path knowledgeCache
                                 )
                                 (project.addedOrChangedModules
                                     |> DictLocalExtra.fromArrayMap
                                         (\file ->
                                             { key = file.path
-                                            , value = file |> moduleToKnowledge
+                                            , value =
+                                                { path = file.path
+                                                , knowledge = check.inspectModule file
+                                                }
                                             }
                                         )
                                 )
                                 (cache.moduleKnowledgeByPath
                                     |> dictRemoveKeys project.removedModulePaths
                                 )
-                                (Array.Builder.empty 2)
-                                |> Array.Builder.toArray
+                                Dict.empty
 
-                        extraFileToKnowledge :
-                            { path : String, source : String }
-                            -> { path : String, knowledge : knowledge }
-                        extraFileToKnowledge fileInfo =
-                            { path = fileInfo.path
-                            , knowledge = check.inspectExtraFile fileInfo
-                            }
-
-                        extraFilesKnowledges : Array { path : String, knowledge : knowledge }
+                        extraFilesKnowledges : Dict String knowledge
                         extraFilesKnowledges =
+                            -- can be optimized
                             Dict.merge
-                                (\_ new soFar -> soFar |> Array.Builder.pushLast new)
-                                (\_ new _ soFar -> soFar |> Array.Builder.pushLast new)
+                                (\_ new soFar -> soFar |> Dict.set new.path new.knowledge)
+                                (\_ new _ soFar -> soFar |> Dict.set new.path new.knowledge)
                                 (\path knowledgeCache soFar ->
-                                    soFar
-                                        |> Array.Builder.pushLast { path = path, knowledge = knowledgeCache }
+                                    soFar |> Dict.set path knowledgeCache
                                 )
                                 (project.addedOrChangedExtraFiles
                                     |> DictLocalExtra.fromArrayMap
                                         (\file ->
                                             { key = file.path
-                                            , value = file |> extraFileToKnowledge
+                                            , value =
+                                                { path = file.path
+                                                , knowledge = check.inspectExtraFile file
+                                                }
                                             }
                                         )
                                 )
                                 (cache.extraFileKnowledgeByPath
                                     |> dictRemoveKeys project.removedExtraFilePaths
                                 )
-                                (Array.Builder.empty 0)
-                                |> Array.Builder.toArray
-
-                        allKnowledges : Array knowledge
-                        allKnowledges =
-                            -- can maybe be optimized
-                            ((extraFilesKnowledges |> Array.map .knowledge)
-                                ++ (moduleKnowledges |> Array.map .knowledge)
-                            )
-                                |> Array.pushLast directDependenciesKnowledgeAndCache
-                                |> Array.pushLast grenJsonKnowledgeAndCache
+                                Dict.empty
+                        
+                        combinedKnowledge : knowledge
+                        combinedKnowledge =
+                            moduleKnowledges
+                                |> Dict.foldl
+                                    (\_ knowledge soFar -> soFar |> check.knowledgeMerge knowledge)
+                                    (extraFilesKnowledges
+                                        |> Dict.foldl
+                                            (\_ knowledge soFar -> soFar |> check.knowledgeMerge knowledge)
+                                            (grenJsonKnowledgeAndCache
+                                                |> check.knowledgeMerge directDependenciesKnowledgeAndCache
+                                            )
+                                    )
                     in
-                    when allKnowledges |> knowledgesFoldMapToMaybe Basics.identity is
-                        Nothing ->
-                            { errorsByPath = Dict.empty, nextRun = runWithCache knowledgeCacheEmpty }
-
-                        Just completeKnowledge ->
-                            { errorsByPath =
-                                completeKnowledge
-                                    |> check.report
-                                    |> Array.foldl
-                                        (\error soFar ->
-                                            soFar
-                                                |> Dict.update
-                                                    error.path
-                                                    (\errorsForPathSoFar ->
-                                                        errorsForPathSoFar
-                                                            |> Maybe.withDefault (Array.Builder.empty 1)
-                                                            |> Array.Builder.pushLast
-                                                                { message = error.message
-                                                                , details = error.details
-                                                                , region = error.region
-                                                                , fixEditsByPath = error.fix |> fixToFileEditsByPath
-                                                                }
-                                                            |> Just
-                                                    )
-                                        )
-                                        Dict.empty
-                                        |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
-                            , nextRun =
-                                runWithCache
-                                    { grenJsonKnowledge = Just grenJsonKnowledgeAndCache
-                                    , directDependenciesKnowledge = Just directDependenciesKnowledgeAndCache
-                                    , moduleKnowledgeByPath =
-                                        moduleKnowledges
-                                            |> DictLocalExtra.fromArrayMap
-                                                (\moduleKnowledge ->
-                                                    { key = moduleKnowledge.path, value = moduleKnowledge.knowledge }
-                                                )
-                                    , extraFileKnowledgeByPath =
-                                        extraFilesKnowledges
-                                            |> DictLocalExtra.fromArrayMap
-                                                (\extraFileKnowledge ->
-                                                    { key = extraFileKnowledge.path, value = extraFileKnowledge.knowledge }
-                                                )
-                                    }
+                    { errorsByPath =
+                        check.report combinedKnowledge
+                            |> Array.foldl
+                                (\error soFar ->
+                                    soFar
+                                        |> Dict.update
+                                            error.path
+                                            (\errorsForPathSoFar ->
+                                                errorsForPathSoFar
+                                                    |> Maybe.withDefault (Array.Builder.empty 1)
+                                                    |> Array.Builder.pushLast
+                                                        { message = error.message
+                                                        , details = error.details
+                                                        , region = error.region
+                                                        , fixEditsByPath = error.fix |> fixToFileEditsByPath
+                                                        }
+                                                    |> Just
+                                            )
+                                )
+                                Dict.empty
+                                |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
+                    , nextRun =
+                        runWithCache
+                            { grenJsonKnowledge = Just grenJsonKnowledgeAndCache
+                            , directDependenciesKnowledge = Just directDependenciesKnowledgeAndCache
+                            , moduleKnowledgeByPath = moduleKnowledges
+                            , extraFileKnowledgeByPath = extraFilesKnowledges
                             }
+                    }
                 )
     in
     { ignoreErrorsForPathsWhere = \_ -> False
