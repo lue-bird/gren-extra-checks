@@ -1,0 +1,333 @@
+module DebugIsNotUsed exposing (check)
+
+{-|
+
+@docs check
+
+-}
+
+import ExtraCheck
+import SourcePosition
+import Compiler.Ast.Source
+import Set
+import Dict
+import DictLocalExtra
+import Array.Builder
+
+
+{-| Report uses of [`Debug` module](https://packages.gren-lang.org/package/gren-lang/core/version/latest/module/Debug) members
+
+  - `Debug.todo` marks missing functionality which needs to be added gradually
+  - `Debug.log` is a quick and dirty way to display a value in the console
+    and can for example be used to inspect private (opaque) types.
+    It's nothing a published product should make use of.
+  - `Debug.toString` is a quick and dirty way to display a value anywhere,
+    similar to `Debug.log`
+
+Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+
+
+### reported
+
+    a =
+        "" |> Debug.log "text"
+
+    b =
+        Debug.todo ""
+
+    c =
+        1 |> Debug.toString
+
+
+### not reported
+
+    a stdout =
+        Stream.Log.line stdout "text"
+    
+    b =
+        Node.exit 1
+
+    c =
+        1 |> String.fromInt
+
+-}
+check : ExtraCheck.Check
+check =
+    ExtraCheck.create
+        { inspectModule = moduleDataToKnowledge
+        , inspectGrenJson = \_ -> knowledgeNone
+        , inspectExtraFile = \_ -> knowledgeNone
+        , inspectDirectDependencies = \_ -> knowledgeNone
+        , knowledgeMerge = knowledgeMerge
+        , report = report
+        }
+
+
+type alias Knowledge =
+    Dict.Dict
+        -- path
+        String
+        { debugLogUses : Array SourcePosition.Region
+        , debugTodoUses : Array SourcePosition.Region
+        , debugToStringUses : Array SourcePosition.Region
+        }
+
+
+knowledgeNone : Knowledge
+knowledgeNone =
+    Dict.empty
+
+
+moduleDataToKnowledge :
+    { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+    -> Knowledge
+moduleDataToKnowledge moduleData =
+    let
+        debugImport : { fullQualification : String, exposes : Array String }
+        debugImport =
+            moduleData.syntax.imports
+                |> arrayMapAndFirstJust
+                    (\{ value = import_ } ->
+                        when import_.module_.value is
+                            "Debug" ->
+                                Just
+                                    { fullQualification =
+                                        import_.alias
+                                            |> Maybe.withDefault "Debug"
+                                    , exposes =
+                                        when import_.expose is
+                                            Compiler.Ast.Source.Explicit explicitExposes ->
+                                                explicitExposes
+                                                    |> Array.mapAndKeepJust
+                                                        (\expose ->
+                                                            when expose is
+                                                                Compiler.Ast.Source.ExposedLower valueOrFunctionName ->
+                                                                    Just valueOrFunctionName.value
+
+                                                                Compiler.Ast.Source.ExposedUpper exposeName ->
+                                                                    Nothing
+
+                                                                Compiler.Ast.Source.ExposedOperator symbol ->
+                                                                    Nothing
+                                                        )
+
+                                            Compiler.Ast.Source.Open ->
+                                                [ "log", "todo", "toString" ]
+                                    }
+
+                            _ ->
+                                Nothing
+                    )
+                |> Maybe.withDefaultLazy
+                    (\{} ->
+                        -- implicit import
+                        { fullQualification = "Debug", exposes = [] }
+                    )
+
+        moduleDeclaredValueOrFunctionNames : Set.Set String
+        moduleDeclaredValueOrFunctionNames =
+            moduleData.syntax.values
+                |> Array.foldl
+                    (\valueOrFunctionDeclaration soFar ->
+                        soFar |> Set.set valueOrFunctionDeclaration.value.value.name.value
+                    )
+                    Set.empty
+
+        debugUses =
+            moduleData.syntax.values
+                |> Array.foldl
+                    (\valueOrFunctionDeclaration soFarAcrossDeclarations ->
+                        valueOrFunctionDeclaration.value.value.body
+                            |> expressionUsedReferencesFold
+                                (\reference referenceRegion soFar ->
+                                    if
+                                        (reference |> referenceIsImportedFrom debugImport)
+                                            && Basics.not (reference.qualification == "" && Set.member reference.name moduleDeclaredValueOrFunctionNames)
+                                    then
+                                        when reference.name is
+                                            "toString" ->
+                                                { debugLogUses = soFar.debugLogUses
+                                                , debugTodoUses = soFar.debugTodoUses
+                                                , debugToStringUses =
+                                                    soFar.debugToStringUses
+                                                        |> Array.Builder.pushLast referenceRegion
+                                                }
+                                            "todo" ->
+                                                { debugLogUses = soFar.debugLogUses
+                                                , debugToStringUses = soFar.debugToStringUses
+                                                , debugTodoUses =
+                                                    soFar.debugTodoUses
+                                                        |> Array.Builder.pushLast referenceRegion
+                                                }
+                                            "log" ->
+                                                { debugToStringUses = soFar.debugToStringUses
+                                                , debugTodoUses = soFar.debugTodoUses
+                                                , debugLogUses =
+                                                    soFar.debugLogUses
+                                                        |> Array.Builder.pushLast referenceRegion
+                                                }
+                                            _ ->
+                                                soFar
+
+                                    else
+                                        soFar
+                                )
+                                soFarAcrossDeclarations
+                    )
+                    { debugLogUses = Array.Builder.empty 0
+                    , debugTodoUses = Array.Builder.empty 0
+                    , debugToStringUses = Array.Builder.empty 0
+                    }                    
+
+        debugLogUses = debugUses.debugLogUses |> Array.Builder.toArray
+        debugTodoUses = debugUses.debugTodoUses |> Array.Builder.toArray
+        debugToStringUses = debugUses.debugToStringUses |> Array.Builder.toArray
+    in
+    if (debugLogUses |> Array.isEmpty) && (debugTodoUses |> Array.isEmpty) && (debugToStringUses |> Array.isEmpty) then
+        knowledgeNone
+    else
+        Dict.singleton moduleData.path
+            { debugLogUses = debugLogUses
+            , debugTodoUses = debugTodoUses
+            , debugToStringUses = debugToStringUses
+            }
+
+
+referenceIsImportedFrom : { fullQualification : String, exposes : Array String } -> { qualification : String, name : String } -> Bool
+referenceIsImportedFrom importOfTheModuleToCheckFor reference =
+    reference.qualification == importOfTheModuleToCheckFor.fullQualification
+        || ((reference.qualification == "")
+                && (importOfTheModuleToCheckFor.exposes |> Array.member reference.name)
+           )
+
+
+stringToReference : String -> { qualification : String, name : String }
+stringToReference referenceString =
+    when referenceString |> String.lastIndexOf "." is
+        Nothing ->
+            { qualification = "", name = referenceString }
+
+        Just lastDotIndex ->
+            { qualification = referenceString |> String.takeFirst lastDotIndex
+            , name = referenceString |> String.dropFirst (lastDotIndex + 1)
+            }
+
+
+knowledgeMerge : Knowledge -> Knowledge -> Knowledge
+knowledgeMerge a b =
+    Dict.union a b
+
+
+report : Knowledge -> Array ExtraCheck.Error
+report knowledge =
+    knowledge
+        |> Dict.foldl
+            (\modulePath regions errorsSoFar ->
+                -- TODO optimize
+                errorsSoFar
+                    |> Array.Builder.append
+                        (regions.debugLogUses
+                            |> Array.map
+                                (\debugLogUse ->
+                                    { path = modulePath
+                                    , message = "Debug.log is used"
+                                    , details =
+                                        [ """
+                                          Debug.log is a quick and dirty way to display a value in the console
+                                          and can for example be used to inspect private (opaque) types.
+                                          It's nothing a published product should make use of.
+                                          Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                          """
+                                        ]
+                                    , region = debugLogUse
+                                    , fix =
+                                        -- consider replacing Debug.log region by (\_ -> identity)
+                                        -- and replacing direct calls by the second argument
+                                        []
+                                    }
+                                )
+                        )
+                    |> Array.Builder.append
+                        (regions.debugToStringUses
+                            |> Array.map
+                                (\debugToStringUse ->
+                                    { path = modulePath
+                                    , message = "Debug.toString is used"
+                                    , details =
+                                        [ """
+                                          Debug.toString is a quick and dirty way to display a value somewhere
+                                          and can for example be used to inspect private (opaque) types.
+                                          It's nothing a published product should make use of.
+                                          Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                          """
+                                        ]
+                                    , region = debugToStringUse
+                                    , fix = []
+                                    }
+                                )
+                        )
+                    |> Array.Builder.append
+                        (regions.debugTodoUses
+                            |> Array.map
+                                (\debugTodoUse ->
+                                    { path = modulePath
+                                    , message = "Debug.todo is used"
+                                    , details =
+                                        [ "Debug.todo marks missing functionality which needs to be added gradually."
+                                        ]
+                                    , region = debugTodoUse
+                                    , fix = []
+                                    }
+                                )
+                        )
+            )
+            (Array.Builder.empty 0)
+        |> Array.Builder.toArray
+
+
+expressionUsedReferencesFold :
+    ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Expression
+    -> state
+expressionUsedReferencesFold reduceWithReference initialState expression =
+    when expression.value is
+        Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
+            initialState
+                |> reduceWithReference { qualification = "", name = variable }
+                    { start = expression.start, end = expression.end }
+        
+        Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
+            initialState
+                |> reduceWithReference { qualification = qualification, name = name }
+                    { start = expression.start, end = expression.end }
+        
+        expressionNotVariable ->
+            -- TODO when encountering newly-introduced local variables, add them to variablesToExclude
+            expressionNotVariable
+                |> ExtraCheck.expressionImmediateSubsFold
+                    (\sub soFar ->
+                        sub |> expressionUsedReferencesFold reduceWithReference soFar
+                    )
+                    initialState
+
+{-| Do not use if short-cutting is likely
+-}
+arrayMapAndFirstJust : (element -> Maybe found) -> Array element -> Maybe found
+arrayMapAndFirstJust elementToMaybeFound array =
+    array
+        |> Array.foldl
+            (\element soFar ->
+                soFar |> maybeOnNothing (\{} -> elementToMaybeFound element)
+            )
+            Nothing
+
+
+maybeOnNothing : ({} -> Maybe a) -> Maybe a -> Maybe a
+maybeOnNothing onNothing maybe =
+    when maybe is
+        Nothing ->
+            onNothing {}
+        
+        Just _ as just ->
+            just

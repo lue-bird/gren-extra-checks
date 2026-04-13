@@ -1,8 +1,8 @@
 .gren
 gren-stuff
 gren_packages
-preview/gren.js
-preview/preprocess.js
+gren.js
+preprocess.js
 *.log
 node_modules/
 demo/index.html

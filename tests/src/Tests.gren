@@ -1,15 +1,206 @@
 module Tests exposing (tests)
 
 import ExtraCheck
+import DebugIsNotUsed
 import StringSpellsCompanyNameCorrectly
-import Test exposing (Test)
+import Test
+import Expect
+import Test.Runner
+import Random
 
 
-tests : Test
+tests : Test.Test
 tests =
     Test.describe "gren-extra-checks"
-        [ Test.describe "StringSpellsCompanyNameCorrectly"
-            [ Test.test "(should pass) fruits.com in string is accepted"
+        [ Test.describe "DebugIsNotUsed"
+            [ Test.test "fully qualified Debug.log from implicit import"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "Debug.log is used"
+                          , details =
+                                [ """
+                                  Debug.log is a quick and dirty way to display a value in the console
+                                  and can for example be used to inspect private (opaque) types.
+                                  It's nothing a published product should make use of.
+                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                  """
+                                ]
+                          , region = ExtraCheck.ExpectUnder "Debug.log"
+                          , fixedFiles = []
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "fully qualified Debug.log from explicit import"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Debug
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "Debug.log is used"
+                          , details =
+                                [ """
+                                  Debug.log is a quick and dirty way to display a value in the console
+                                  and can for example be used to inspect private (opaque) types.
+                                  It's nothing a published product should make use of.
+                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                  """
+                                ]
+                          , region = ExtraCheck.ExpectUnder "Debug.log"
+                          , fixedFiles = []
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "qualified Debug.log using import alias"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Debug as Dbg
+                                a = Dbg.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "Debug.log is used"
+                          , details =
+                                [ """
+                                  Debug.log is a quick and dirty way to display a value in the console
+                                  and can for example be used to inspect private (opaque) types.
+                                  It's nothing a published product should make use of.
+                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                  """
+                                ]
+                          , region = ExtraCheck.ExpectUnder "Dbg.log"
+                          , fixedFiles = []
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "Debug.log where Debug points to a different module"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Stream.Log as Debug
+                                import Debug as Dbg
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors = []
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "unqualified Debug.log using explicit import expose"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Debug exposing (log)
+                                a = log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors =
+                        [ { path = "src/A.gren"
+                          , message = "Debug.log is used"
+                          , details =
+                                [ """
+                                  Debug.log is a quick and dirty way to display a value in the console
+                                  and can for example be used to inspect private (opaque) types.
+                                  It's nothing a published product should make use of.
+                                  Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                  """
+                                ]
+                          , region =
+                                ExtraCheck.ExpectUnderExactly
+                                    { section = "log", startingAt = { row = 3, col = 5 } }
+                          , fixedFiles = []
+                          }
+                        ]
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "unqualified log referring to module-level variable, not explicit import expose"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Debug exposing (log)
+                                a = log "·u·"
+                                log = Basics.identity
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors = []
+                    }
+                        |> ExtraCheck.test
+                )
+            , Test.test "unqualified log referring to local variable, not explicit import expose"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                import Debug exposing (log)
+                                a log = log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DebugIsNotUsed.check
+                    , expectedErrors = []
+                    }
+                        |> ExtraCheck.test
+                )
+            ]
+        , Test.describe "StringSpellsCompanyNameCorrectly"
+            [ Test.test "fruits.com in string is accepted"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
@@ -27,7 +218,7 @@ tests =
                     }
                         |> ExtraCheck.test
                 )
-            , Test.test "(should pass) frits.com in string is reported"
+            , Test.test "frits.com in string is reported"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
@@ -79,6 +270,7 @@ tests =
                         []
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             , Test.test "(should fail because missing errors) frits.com in string is reported"
                 (\{} ->
@@ -98,6 +290,7 @@ tests =
                         []
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             , Test.test "(should fail because missing fixes) frits.com in string is reported"
                 (\{} ->
@@ -123,6 +316,7 @@ tests =
                         ]
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             , Test.test "(should fail because incorrect range) frits.com in string is reported"
                 (\{} ->
@@ -157,6 +351,7 @@ tests =
                         ]
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             , Test.test "(should fail because fixed module source doesn't parse) frits.com in string is reported"
                 (\{} ->
@@ -191,6 +386,7 @@ tests =
                         ]
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             , Test.test "(should fail because fixed module source doesn't match) frits.com in string is reported"
                 (\{} ->
@@ -225,6 +421,16 @@ tests =
                         ]
                     }
                         |> ExtraCheck.test
+                        |> expectExpectationFail
                 )
             ]
         ]
+
+
+expectExpectationFail : Expect.Expectation -> Expect.Expectation
+expectExpectationFail expectationToCheck =
+    when expectationToCheck |> Test.Runner.getFailureReason is
+        Nothing ->
+            Expect.fail "expected Expect.fail _"
+        Just failure ->
+            Expect.pass
