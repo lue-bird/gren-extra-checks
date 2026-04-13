@@ -2,7 +2,7 @@ module ExtraCheck exposing
     ( ignoreErrorsForPathsWhere
     , create
     , Error, grenJsonPath
-    , SourceEdit(..), insertAt, removeRegion, replaceRegion
+    , SourceEdit, insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
     , expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
     , moduleExposes, exposedArrayToExposes
@@ -208,7 +208,7 @@ type Run
 
 
 {-| Relative path to the project gren.json to be used in an [`Error`](#Error) or [expected test error](ExtraCheck#test).
-Always equal to `"gren.json"`
+Constant for `"gren.json"`
 -}
 grenJsonPath : String
 grenJsonPath =
@@ -575,7 +575,11 @@ run :
         , nextRun : Run
         }
 run check project =
-    project |> (check.run |> (\(Run r) -> r))
+    let
+        (Run runWithCapturedCache) =
+            check.run
+    in
+    runWithCapturedCache project
 
 
 {-| Cache for the result of the analysis of an inspected project part (modules, gren.json, extra files, direct dependencies).
@@ -803,9 +807,11 @@ determineModuleOrigin :
     Dict
         String
         { alias : Maybe String
-        , exposes : Set String -- includes names of variants
+        , -- includes names of variants
+          exposes : Set String
         }
-    -> ({ qualification : String, name : String } -> Maybe String)
+    -> { qualification : String, name : String }
+    -> Maybe String
 determineModuleOrigin imports { qualification, name = unqualifiedName } =
     when imports |> Dict.get qualification is
         Just _ ->
@@ -884,7 +890,8 @@ importsToExplicit :
         Dict
             String
             { alias : Maybe String
-            , exposes : Set String -- includes names of variants
+            , -- includes names of variants
+              exposes : Set String
             }
 importsToExplicit info =
     let
@@ -892,7 +899,8 @@ importsToExplicit info =
             Dict
                 String
                 { alias : Maybe String
-                , exposes : Set String -- includes names of variants
+                , -- includes names of variants
+                  exposes : Set String
                 }
         explicitImportsExposingAllAndDefaultOnes =
             info.importsExposingAll
@@ -977,7 +985,8 @@ implicitImports :
     Dict
         String
         { alias : Maybe String
-        , exposes : Set String -- includes names of variants
+        , -- includes names of variants
+          exposes : Set String
         }
 implicitImports =
     Dict.singleton "Basics"  
@@ -1047,13 +1056,15 @@ mergeInImport :
         (Dict
             String
             { alias : Maybe String
-            , exposes : Set String -- includes names of variants
+            , -- includes names of variants
+              exposes : Set String
             }
          ->
             Dict
                 String
                 { alias : Maybe String
-                , exposes : Set String -- includes names of variants
+                , -- includes names of variants
+                  exposes : Set String
                 }
         )
 mergeInImport importInfoToAdd imports =
@@ -1087,8 +1098,8 @@ mergeInImport importInfoToAdd imports =
 {-| A single edit to be applied to a file's source
 in order to fix a [check error](#Error)
 -}
-type SourceEdit
-    = SourceRangeReplacement { region : SourcePosition.Region, replacement : String }
+type alias SourceEdit =
+    { region : SourcePosition.Region, replacement : String }
 
 
 {-| Remove the section in between a given region
@@ -1102,7 +1113,7 @@ removeRegion rangeToRemove =
 -}
 replaceRegion : SourcePosition.Region -> String -> SourceEdit
 replaceRegion range replacement =
-    SourceRangeReplacement { region = range, replacement = replacement }
+    { region = range, replacement = replacement }
 
 
 {-| Insert something at the given position
@@ -1117,13 +1128,6 @@ insertAt location toInsert =
 type SourceEditError
     = AfterFixIsUnchanged
     | FixHasCollisionsInRanges
-
-
-fixRange : SourceEdit -> SourcePosition.Region
-fixRange fix =
-    when fix is
-        SourceRangeReplacement replace ->
-            replace.region
 
 
 {-| Try to apply a set of [`SourceEdit`](#SourceEdit)es to the relevant file source,
@@ -1142,7 +1146,7 @@ sourceApplyEdits fixes sourceCode =
                     |> Array.sortWith
                         (\a b ->
                             -- flipped order
-                            sourcePositionCompare (b |> fixRange |> .start) (a |> fixRange |> .start)
+                            sourcePositionCompare b.region.start a.region.start
                         )
                     |> Array.foldl applyFixSingle (sourceCode |> String.lines)
                     |> String.join "\n"
@@ -1163,39 +1167,37 @@ sourcePositionCompare a b =
 
 
 applyFixSingle : SourceEdit -> (Array String -> Array String)
-applyFixSingle fixToApply lines =
-    when fixToApply is
-        SourceRangeReplacement replace ->
-            let
-                linesBefore : Array String
-                linesBefore =
-                    lines |> Array.takeFirst (replace.region.start.row - 1)
+applyFixSingle replace lines =
+    let
+        linesBefore : Array String
+        linesBefore =
+            lines |> Array.takeFirst (replace.region.start.row - 1)
 
-                linesAfter : Array String
-                linesAfter =
-                    lines |> Array.dropFirst replace.region.end.row
+        linesAfter : Array String
+        linesAfter =
+            lines |> Array.dropFirst replace.region.end.row
 
-                startLine : String
-                startLine =
-                    lines
-                        |> Array.get (replace.region.start.row - 1)
-                        |> Maybe.withDefault ""
-                        |> String.takeFirst (replace.region.start.col - 1)
+        startLine : String
+        startLine =
+            lines
+                |> Array.get (replace.region.start.row - 1)
+                |> Maybe.withDefault ""
+                |> String.takeFirst (replace.region.start.col - 1)
 
-                endLine : String
-                endLine =
-                    lines
-                        |> Array.get (replace.region.end.row - 1)
-                        |> Maybe.withDefault ""
-                        |> String.dropFirst (replace.region.end.col - 1)
-            in
-            linesBefore
-                ++ (replace.replacement
-                        |> String.lines
-                        |> Array.update 0 (\replacementFirstLine -> startLine ++ replacementFirstLine)
-                        |> arrayLastMap (\replacementLastLine -> replacementLastLine ++ endLine)
-                   )
-                ++ linesAfter
+        endLine : String
+        endLine =
+            lines
+                |> Array.get (replace.region.end.row - 1)
+                |> Maybe.withDefault ""
+                |> String.dropFirst (replace.region.end.col - 1)
+    in
+    linesBefore
+        ++ (replace.replacement
+                |> String.lines
+                |> Array.update 0 (\replacementFirstLine -> startLine ++ replacementFirstLine)
+                |> arrayLastMap (\replacementLastLine -> replacementLastLine ++ endLine)
+            )
+        ++ linesAfter
 
 
 sourceEditsContainRangeCollisions : Array SourceEdit -> Bool
@@ -1203,7 +1205,7 @@ sourceEditsContainRangeCollisions fixes =
     fixes
         |> arrayAnyPair
             (\edit0 edit1 ->
-                rangesCollide (edit0 |> fixRange) (edit1 |> fixRange)
+                rangesCollide edit0.region edit1.region
             )
 
 
