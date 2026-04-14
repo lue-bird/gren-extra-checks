@@ -7,7 +7,7 @@ module ExtraCheck exposing
     , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
     , patternVariablesIntoDict, patternArrayVariablesIntoDict
     , moduleExposes, exposedArrayToExposes
-    , sourceExtractInRange, sourceRegionsOf
+    , locatedRegion, sourceExtractInRange, sourceRegionsOf
     , outlineExposedModuleNameSet
     , expectToReport, applicationConfigurationMinimal, ExpectedErrorRange(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
@@ -67,7 +67,7 @@ This fine control allows you to e.g. skip visiting certain parts that you alread
 @docs patternVariablesIntoDict, patternArrayVariablesIntoDict
 @docs determineModuleOrigin, importsToExplicit
 @docs moduleExposes, exposedArrayToExposes
-@docs sourceExtractInRange, sourceRegionsOf
+@docs locatedRegion, sourceExtractInRange, sourceRegionsOf
 @docs outlineExposedModuleNameSet
 
 Suggestions to add, remove or change helpers welcome!
@@ -600,6 +600,21 @@ type alias Cache knowledge =
     , moduleKnowledgeByPath : Dict String knowledge
     , extraFileKnowledgeByPath : Dict String knowledge
     }
+
+
+{-| Package the start and end positions of a located syntax node
+into a `SourcePosition.Region`.
+
+    replaceExpressionByEmptyArrayFix : Compiler.Ast.Source.Expression -> ExtraCheck.SourceEdit
+    replaceExpressionByEmptyArrayFix =
+        ExtraCheck.replaceRegion
+            (expression |> ExtraCheck.locatedRegion)
+            "[]"
+
+-}
+locatedRegion : SourcePosition.Located value -> SourcePosition.Region
+locatedRegion located =
+    { start = located.start, end = located.end }
 
 
 {-| In when you need the read the source in a region as formatted by the user.
@@ -2869,10 +2884,11 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                                 when def.value is
                                     Compiler.Ast.Source.Destruct destruct ->
                                         patternVariablesIntoDict soFar destruct.pattern
+
                                     Compiler.Ast.Source.Define define ->
                                         soFar
                                             |> Dict.set define.name.value 
-                                                { start = define.name.start, end = define.name.end }
+                                                (define.name |> locatedRegion)
                             )
                             initialLocalVariables
             in
@@ -2940,7 +2956,7 @@ patternVariablesIntoDict initialDict pattern =
         Compiler.Ast.Source.PStr _ -> initialDict
         Compiler.Ast.Source.PAnything _ -> initialDict
         Compiler.Ast.Source.PVar variableName ->
-            initialDict |> Dict.set variableName { start = pattern.start, end = pattern.end }
+            initialDict |> Dict.set variableName (pattern |> locatedRegion)
         Compiler.Ast.Source.PAlias alias ->
             patternVariablesIntoDict initialDict alias.pattern
         Compiler.Ast.Source.PCtor variant ->

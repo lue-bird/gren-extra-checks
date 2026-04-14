@@ -131,7 +131,7 @@ moduleDataToKnowledge moduleData =
                     (\valueOrFunctionDeclaration soFar ->
                         soFar
                             |> Dict.set valueOrFunctionDeclaration.value.value.name.value
-                                (valueOrFunctionDeclaration.value.value.name |> locatedRegion)
+                                (valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion)
                     )
                     Dict.empty
 
@@ -304,12 +304,12 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
             else
                 initialState
                     |> reduceWithReference { qualification = "", name = variable }
-                        { start = expression.start, end = expression.end }
+                        (expression |> ExtraCheck.locatedRegion)
         
         Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
             initialState
                 |> reduceWithReference { qualification = qualification, name = name }
-                    { start = expression.start, end = expression.end }
+                    (expression |> ExtraCheck.locatedRegion)
         
         expressionNotVariable ->
             expressionNotVariable
@@ -323,11 +323,6 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                                 soFar
                     )
                     initialState
-
-
-locatedRegion : SourcePosition.Located value -> SourcePosition.Region
-locatedRegion located =
-    { start = located.start, end = located.end }
 
 
 {-| Do not use if short-cutting is likely
