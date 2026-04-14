@@ -74,7 +74,7 @@ type ProgramState
                     { source : String
                     , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                     , message : String
-                    , details : Array String
+                    , details : String
                     , region : SourcePosition.Region
                     , path : String
                     }
@@ -83,7 +83,7 @@ type ProgramState
                         (Array
                             { region : SourcePosition.Region
                             , message : String
-                            , details : Array String
+                            , details : String
                             , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
                             }
                         )
@@ -231,10 +231,11 @@ readFileString fileSystemPermission path =
                 "file system error: "
                     ++ (fileSystemError |> FileSystem.errorToString)
                     ++ ", reading "
-                    ++ (path |> FileSystem.Path.toPosixString))
+                    ++ (path |> FileSystem.Path.toPosixString)
+            )
         |> Task.andThen
             (\bytes ->
-                when Bytes.toString bytes is
+                when bytes |> Bytes.toString is
                     Just string ->
                         Task.succeed string
 
@@ -1378,7 +1379,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                     { source : String
                     , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                     , message : String
-                    , details : Array String
+                    , details : String
                     , region : SourcePosition.Region
                     , path : String
                     }
@@ -1395,7 +1396,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                                         { source : String
                                         , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                                         , message : String
-                                        , details : Array String
+                                        , details : String
                                         , region : SourcePosition.Region
                                         , path : String
                                         }
@@ -1547,7 +1548,7 @@ allModuleFilesToWithParsedSyntax moduleFiles =
 type alias FileReviewError =
     { region : SourcePosition.Region
     , message : String
-    , details : Array String
+    , details : String
     , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
     }
 
@@ -1559,7 +1560,7 @@ errorDisplay :
             | path : String
             , region : SourcePosition.Region
             , message : String
-            , details : Array String
+            , details : String
             , fixedSources :
                 Array
                     { path : String
@@ -1583,7 +1584,7 @@ errorDisplay source error =
                 |> String.join "\n"
            )
         ++ "\n\n"
-        ++ (error.details |> String.join "\n\n")
+        ++ error.details
         ++ (if error.fixedSources |> Array.isEmpty then
                 ""
 
@@ -1782,7 +1783,7 @@ type NextFixableOrAllUnfixable
             { source : String
             , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
             , message : String
-            , details : Array String
+            , details : String
             , region : SourcePosition.Region
             , path : String
             }
@@ -1798,7 +1799,7 @@ fixableOrAllUnfixableToFixable :
                 { source : String
                 , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                 , message : String
-                , details : Array String
+                , details : String
                 , region : SourcePosition.Region
                 , path : String
                 }

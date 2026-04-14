@@ -31,13 +31,12 @@ tests =
                             [ { path = "src/A.gren"
                               , message = "Debug.log is used"
                               , details =
-                                    [ """
-                                      Debug.log is a quick and dirty way to display a value in the console
-                                      and can for example be used to inspect private (opaque) types.
-                                      It's nothing a published product should make use of.
-                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                      """
-                                    ]
+                                    """
+                                    Debug.log is a quick and dirty way to display a value in the console
+                                    and can for example be used to inspect private (opaque) types.
+                                    It's nothing a published product should make use of.
+                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    """
                               , region = ExtraCheck.ExpectUnder "Debug.log"
                               , fixedFiles = []
                               }
@@ -62,13 +61,12 @@ tests =
                             [ { path = "src/A.gren"
                               , message = "Debug.log is used"
                               , details =
-                                    [ """
-                                      Debug.log is a quick and dirty way to display a value in the console
-                                      and can for example be used to inspect private (opaque) types.
-                                      It's nothing a published product should make use of.
-                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                      """
-                                    ]
+                                    """
+                                    Debug.log is a quick and dirty way to display a value in the console
+                                    and can for example be used to inspect private (opaque) types.
+                                    It's nothing a published product should make use of.
+                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    """
                               , region = ExtraCheck.ExpectUnder "Debug.log"
                               , fixedFiles = []
                               }
@@ -93,13 +91,12 @@ tests =
                             [ { path = "src/A.gren"
                               , message = "Debug.log is used"
                               , details =
-                                    [ """
-                                      Debug.log is a quick and dirty way to display a value in the console
-                                      and can for example be used to inspect private (opaque) types.
-                                      It's nothing a published product should make use of.
-                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                      """
-                                    ]
+                                    """
+                                    Debug.log is a quick and dirty way to display a value in the console
+                                    and can for example be used to inspect private (opaque) types.
+                                    It's nothing a published product should make use of.
+                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    """
                               , region = ExtraCheck.ExpectUnder "Dbg.log"
                               , fixedFiles = []
                               }
@@ -142,13 +139,12 @@ tests =
                             [ { path = "src/A.gren"
                               , message = "Debug.log is used"
                               , details =
-                                    [ """
-                                      Debug.log is a quick and dirty way to display a value in the console
-                                      and can for example be used to inspect private (opaque) types.
-                                      It's nothing a published product should make use of.
-                                      Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                      """
-                                    ]
+                                    """
+                                    Debug.log is a quick and dirty way to display a value in the console
+                                    and can for example be used to inspect private (opaque) types.
+                                    It's nothing a published product should make use of.
+                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    """
                               , region =
                                     ExtraCheck.ExpectUnderExactly
                                         { section = "log", startingAt = { row = 3, col = 5 } }
@@ -228,7 +224,7 @@ tests =
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "misspelled fruits.com"
-                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
@@ -297,7 +293,7 @@ tests =
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "misspelled fruits.com"
-                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles = []
                               }
@@ -322,7 +318,7 @@ tests =
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "misspelled fruits.com"
-                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                               , region = ExtraCheck.ExpectUnder "\"the name is obviously frits.com\""
                               , fixedFiles =
                                     [ { path = "src/A.gren"
@@ -356,7 +352,7 @@ tests =
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "misspelled fruits.com"
-                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
@@ -390,7 +386,7 @@ tests =
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "misspelled fruits.com"
-                              , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                              , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"

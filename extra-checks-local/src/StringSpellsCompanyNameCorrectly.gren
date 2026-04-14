@@ -107,7 +107,7 @@ report knowledge =
             (\stringWithTypos ->
                 { path = stringWithTypos.modulePath
                 , message = "misspelled fruits.com"
-                , details = [ "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`." ]
+                , details = "The typo of using frits.com instead of fruits.com has been made and noticed by users too many times. Our company is `fruits.com`, not `frits.com`."
                 , region = stringWithTypos.region
                 , fix =
                     [ { path = stringWithTypos.modulePath

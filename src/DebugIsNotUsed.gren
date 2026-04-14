@@ -236,13 +236,12 @@ report knowledge =
                                     { path = modulePath
                                     , message = "Debug.log is used"
                                     , details =
-                                        [ """
-                                          Debug.log is a quick and dirty way to display a value in the console
-                                          and can for example be used to inspect private (opaque) types.
-                                          It's nothing a published product should make use of.
-                                          Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                          """
-                                        ]
+                                        """
+                                        Debug.log is a quick and dirty way to display a value in the console
+                                        and can for example be used to inspect private (opaque) types.
+                                        It's nothing a published product should make use of.
+                                        Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                        """
                                     , region = debugLogUse
                                     , fix =
                                         -- consider replacing Debug.log region by (\_ -> identity)
@@ -258,13 +257,12 @@ report knowledge =
                                     { path = modulePath
                                     , message = "Debug.toString is used"
                                     , details =
-                                        [ """
-                                          Debug.toString is a quick and dirty way to display a value somewhere
-                                          and can for example be used to inspect private (opaque) types.
-                                          It's nothing a published product should make use of.
-                                          Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
-                                          """
-                                        ]
+                                        """
+                                        Debug.toString is a quick and dirty way to display a value somewhere
+                                        and can for example be used to inspect private (opaque) types.
+                                        It's nothing a published product should make use of.
+                                        Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                        """
                                     , region = debugToStringUse
                                     , fix = []
                                     }
@@ -277,8 +275,7 @@ report knowledge =
                                     { path = modulePath
                                     , message = "Debug.todo is used"
                                     , details =
-                                        [ "Debug.todo marks missing functionality which needs to be added gradually."
-                                        ]
+                                        "Debug.todo marks missing functionality which needs to be added gradually."
                                     , region = debugTodoUse
                                     , fix = []
                                     }

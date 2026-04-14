@@ -200,7 +200,7 @@ type Run
                     (Array
                         { region : SourcePosition.Region
                         , message : String
-                        , details : Array String
+                        , details : String
                         , fixEditsByPath : Dict String (Array SourceEdit)
                         }
                     )
@@ -295,7 +295,7 @@ An example check that forbids importing both `Element` and
                                     |> Array.Builder.pushLast
                                         { path = moduleData.path
                                         , message = "both `Element` and `Html.Styled` used"
-                                        , details = [ "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple." ]
+                                        , details = "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple."
                                         , region = elementImportRange
                                         , fix = []
                                         }
@@ -465,7 +465,7 @@ type alias Error =
     { path : String
     , region : SourcePosition.Region
     , message : String
-    , details : Array String
+    , details : String
     , fix : Array { path : String, edits : Array SourceEdit }
     }
 
@@ -546,7 +546,7 @@ run :
                 (Array
                     { region : SourcePosition.Region
                     , message : String
-                    , details : Array String
+                    , details : String
                     , fixEditsByPath : Dict String (Array SourceEdit)
                     }
                 )
@@ -1307,7 +1307,7 @@ type alias SuccessfulRunResult =
 -}
 type alias ExpectedFileError =
     { message : String
-    , details : Array String
+    , details : String
     , region : ExpectedErrorRange
     , fixedFiles : Array { path : String, source : String }
     }
@@ -1360,7 +1360,7 @@ with your provided expected errors.
                         |> ExtraCheck.expectToReport
                             [ { path = "src/A.gren"
                               , message = "Remove the use of `Debug` before shipping to production"
-                              , details = [ "Compiling gren code in optimized mode does not allow these helpers." ]
+                              , details = "Compiling gren code in optimized mode does not allow these helpers."
                               , region = ExtraCheck.ExpectUnder "Debug.log"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
@@ -1392,7 +1392,7 @@ expectToReport :
     Array
         { path : String
         , message : String
-        , details : Array String
+        , details : String
         , region : ExpectedErrorRange
         , fixedFiles : Array { path : String, source : String }
         }
@@ -1787,7 +1787,7 @@ invalidExpectedErrorsIn project expectedErrors =
            )
 
 
-grenJsonFixedSourceParsingFailure : Json.Decode.Error -> { message : String, details : Array String } -> String
+grenJsonFixedSourceParsingFailure : Json.Decode.Error -> { message : String, details : String } -> String
 grenJsonFixedSourceParsingFailure decodeError errorInfo =
     failureMessage "expected fixed gren.json failed to parse"
         ("I could not decode the expected fixed gren.json for the error with the message\n\n  \""
@@ -1797,7 +1797,7 @@ grenJsonFixedSourceParsingFailure decodeError errorInfo =
         )
 
 
-moduleFixedSourceParsingFailure : { path : String, errorInfo : { message : String, details : Array String } } -> String
+moduleFixedSourceParsingFailure : { path : String, errorInfo : { message : String, details : String } } -> String
 moduleFixedSourceParsingFailure info =
     failureMessage "expected fixed module failed to parse"
         ("I could not parse the provided expected fixed gren module source code at path "
@@ -2068,10 +2068,10 @@ expectErrorsMatch toCheckForMatchingErrors =
 expectedErrorForMessage :
     { error_
         | message : String
-        , details : Array String
+        , details : String
         , region : ExpectedErrorRange
     }
-    -> { message : String, details : Array String, under : String }
+    -> { message : String, details : String, under : String }
 expectedErrorForMessage expectedError =
     { message = expectedError.message
     , details = expectedError.details
@@ -2153,7 +2153,7 @@ checkMessageAppearsUnder toCheck =
                 {}
 
 
-underMismatch : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> { under : String, errorSourceInRange : String } -> String
+underMismatch : { error_ | region : SourcePosition.Region, message : String, details : String } -> { under : String, errorSourceInRange : String } -> String
 underMismatch error range =
     failureMessage "error location doesn't match"
         ("I found an error with the message\n\n  "
@@ -2166,7 +2166,7 @@ underMismatch error range =
         )
 
 
-wrongLocation : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> SourcePosition.Region -> String -> String
+wrongLocation : { error_ | region : SourcePosition.Region, message : String, details : String } -> SourcePosition.Region -> String -> String
 wrongLocation error range under =
     failureMessage "exact error location doesn't match"
         ("I was looking for the error with the message\n\n  "
@@ -2180,7 +2180,7 @@ wrongLocation error range under =
         )
 
 
-locationIsMissingInSourceCode : { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String -> String
+locationIsMissingInSourceCode : { error_ | region : SourcePosition.Region, message : String, details : String } -> String -> String
 locationIsMissingInSourceCode error under =
     failureMessage "expected error location is missing"
         ("The exact location where the error appears isn't present in the source code.\n\nYou are looking for the error message\n\n  "
@@ -2193,7 +2193,7 @@ locationIsMissingInSourceCode error under =
         )
 
 
-locationIsAmbiguousInSourceCode : String -> { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String -> Array Int -> String
+locationIsAmbiguousInSourceCode : String -> { error_ | region : SourcePosition.Region, message : String, details : String } -> String -> Array Int -> String
 locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
     failureMessage "expected error location is ambiguous"
         ("The exact location where the error appears is ambiguous.\n\nYou are looking for the error message\n\n  "
@@ -2241,9 +2241,9 @@ checkDetailsAreCorrect : FileCheckError -> ExpectedFileError -> Expect.Expectati
 checkDetailsAreCorrect error expectedError =
     Expect.all
         [ \{} ->
-            Array.isEmpty error.details
-                |> Expect.equal False
-                |> Expect.onFail (emptyDetails (.message error))
+            error.details
+                |> Expect.notEqual ""
+                |> Expect.onFail (emptyDetails error.message)
         , \{} ->
             error.details
                 |> Expect.equal expectedError.details
@@ -2252,15 +2252,15 @@ checkDetailsAreCorrect error expectedError =
         {}
 
 
-unexpectedDetails : Array String -> { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String
+unexpectedDetails : String -> { error_ | region : SourcePosition.Region, message : String, details : String } -> String
 unexpectedDetails expectedDetails error =
     failureMessage "error details don't match"
         ("I found an error for a file with the message\n\n  "
             ++ error.message
-            ++ "\n\nand I was expecting its details to be\n\n  "
-            ++ (expectedDetails |> Array.map (\paragraph -> "  " ++ paragraph) |> String.join "\n\n")
-            ++ "\n\nbut I found the details\n\n  "
-            ++ (error.details |> Array.map (\paragraph -> "  " ++ paragraph) |> String.join "\n\n")
+            ++ "\n\nand I was expecting its details to be\n\n    "
+            ++ expectedDetails
+            ++ "\n\nbut I found the details\n\n    "
+            ++ error.details
         )
 
 
@@ -2319,7 +2319,7 @@ checkFileFixesAreCorrect :
     { expectedError_
         | region : ExpectedErrorRange
         , message : String
-        , details : Array String
+        , details : String
     }
     -> String
     -> String
@@ -2364,7 +2364,7 @@ removeWhitespace string =
             )
 
 
-fixedSourceMismatch : String -> String -> { error_ | message : String, details : Array String } -> String
+fixedSourceMismatch : String -> String -> { error_ | message : String, details : String } -> String
 fixedSourceMismatch resultingSource expectedSource error =
     failureMessage "fixed source doesn't match"
         ("I found a different fixed source code than expected for the error with the message\n\n"
@@ -2376,7 +2376,7 @@ fixedSourceMismatch resultingSource expectedSource error =
         )
 
 
-fixedSourceWhitespaceMismatch : String -> String -> { error_ | message : String, details : Array String } -> String
+fixedSourceWhitespaceMismatch : String -> String -> { error_ | message : String, details : String } -> String
 fixedSourceWhitespaceMismatch resultingSource expectedSource error =
     let
         { a = expected, b = resulting } =
@@ -2437,7 +2437,7 @@ replaceWhitespace lines =
         |> String.split "\n"
 
 
-unchangedSourceAfterFix : { error_ | message : String, details : Array String } -> String
+unchangedSourceAfterFix : { error_ | message : String, details : String } -> String
 unchangedSourceAfterFix error =
     failureMessage "applying edits did not change the source"
         ("After applying the fixes provided by the error with the message\n\n  "
@@ -2455,7 +2455,7 @@ unchangedSourceAfterFix error =
         )
 
 
-hasCollisionsInFixRanges : { error_ | message : String, details : Array String } -> String
+hasCollisionsInFixRanges : { error_ | message : String, details : String } -> String
 hasCollisionsInFixRanges error =
     failureMessage "source edit ranges collide"
         ("When applying the fixes provided by the error with the message\n\n  "
@@ -2477,7 +2477,7 @@ hasCollisionsInFixRanges error =
         )
 
 
-missingSourceEditsForFile : String -> { error_ | message : String, details : Array String } -> String
+missingSourceEditsForFile : String -> { error_ | message : String, details : String } -> String
 missingSourceEditsForFile path expectedError =
     failureMessage "file fix edits are missing"
         ("The error with the message\n\n  "
@@ -2488,7 +2488,7 @@ missingSourceEditsForFile path expectedError =
         )
 
 
-unexpectedEditsToFile : String -> { error_ | message : String, details : Array String } -> String
+unexpectedEditsToFile : String -> { error_ | message : String, details : String } -> String
 unexpectedEditsToFile path error =
     failureMessage "source edits to file not expected"
         ("The error with the message\n\n  "
@@ -2501,7 +2501,7 @@ unexpectedEditsToFile path error =
         )
 
 
-messageMismatch : { expectedError_ | message : String, details : Array String } -> { error_ | message : String, details : Array String } -> String
+messageMismatch : { expectedError_ | message : String, details : String } -> { error_ | message : String, details : String } -> String
 messageMismatch expectedError reviewError =
     failureMessage "error message doesn't match"
         ("I was looking for the error with the message\n\n  "
@@ -2511,7 +2511,7 @@ messageMismatch expectedError reviewError =
         )
 
 
-tooFewErrors : String -> Array { message : String, details : Array String, under : String } -> String
+tooFewErrors : String -> Array { message : String, details : String, under : String } -> String
 tooFewErrors path missingExpectedErrors =
     failureMessage "missing errors"
         ("I expected to see more errors for the file at path "
@@ -2524,7 +2524,7 @@ tooFewErrors path missingExpectedErrors =
         )
 
 
-tooManyErrors : String -> Array { error_ | region : SourcePosition.Region, message : String, details : Array String } -> String
+tooManyErrors : String -> Array { error_ | region : SourcePosition.Region, message : String, details : String } -> String
 tooManyErrors path extraErrors =
     failureMessage "unexpected additional errors"
         ("I found too many errors for the file at path "
@@ -2601,7 +2601,7 @@ locationToCodeString location =
 type alias FileCheckError =
     { region : SourcePosition.Region
     , message : String
-    , details : Array String
+    , details : String
     , fixEditsByPath : Dict String (Array SourceEdit)
     }
 
