@@ -499,15 +499,16 @@ type alias Error =
   - generated source code which isn't supposed to be read and or over which you have little control
   - you wrote a check that is very specific and should only be applied for a portion of your codebase
 
-`tests/` is never inspected
+(`tests/` is never implicitly inspected since it's a standalone gren project)
 
 -}
 ignoreErrorsForPathsWhere : (String -> Bool) -> Check -> Check
-ignoreErrorsForPathsWhere filterOut check =
+ignoreErrorsForPathsWhere pathShouldNotReceiveReports check =
     { run = check.run
     , ignoreErrorsForPathsWhere =
         \path ->
-            (path |> check.ignoreErrorsForPathsWhere) || (path |> filterOut)
+            (path |> check.ignoreErrorsForPathsWhere)
+                || (path |> pathShouldNotReceiveReports)
     }
 
 
