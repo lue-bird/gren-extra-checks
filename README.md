@@ -1,7 +1,7 @@
 > TODO: polish up the runner, change details from Array String to String, consider walking indirect dependencies as well. add helper to traverse expression with introduced local bindings. Consider switching to gren-diff/a port of minibill's elm-diff
 
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
-It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter internals.
+It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter, faster internals.
 
 To use it for your project, copy this repository's `extra-checks` directory into your project.
 `extra-checks/` is a regular gren application where you can add new checks from local code or `gren package install` to the `checks` list in `src/Main.gren`:

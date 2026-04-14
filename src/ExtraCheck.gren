@@ -346,53 +346,27 @@ create check =
 
                         moduleKnowledges : Dict String knowledge
                         moduleKnowledges =
-                            -- can be optimized
-                            Dict.merge
-                                (\_ new soFar -> soFar |> Dict.set new.path new.knowledge)
-                                (\_ new _ soFar -> soFar |> Dict.set new.path new.knowledge)
-                                (\path knowledgeCache soFar ->
-                                    soFar |> Dict.set path knowledgeCache
-                                )
-                                (project.addedOrChangedModules
-                                    |> DictLocalExtra.fromArrayMap
-                                        (\file ->
-                                            { key = file.path
-                                            , value =
-                                                { path = file.path
-                                                , knowledge = check.inspectModule file
-                                                }
-                                            }
-                                        )
-                                )
-                                (cache.moduleKnowledgeByPath
-                                    |> dictRemoveKeys project.removedModulePaths
-                                )
-                                Dict.empty
+                            project.addedOrChangedModules
+                                |> Array.foldl
+                                    (\file soFar ->
+                                        soFar
+                                            |> Dict.set file.path (check.inspectModule file)
+                                    )
+                                    (project.removedModulePaths
+                                        |> Array.foldl Dict.remove cache.moduleKnowledgeByPath
+                                    )
 
                         extraFilesKnowledges : Dict String knowledge
                         extraFilesKnowledges =
-                            -- can be optimized
-                            Dict.merge
-                                (\_ new soFar -> soFar |> Dict.set new.path new.knowledge)
-                                (\_ new _ soFar -> soFar |> Dict.set new.path new.knowledge)
-                                (\path knowledgeCache soFar ->
-                                    soFar |> Dict.set path knowledgeCache
-                                )
-                                (project.addedOrChangedExtraFiles
-                                    |> DictLocalExtra.fromArrayMap
-                                        (\file ->
-                                            { key = file.path
-                                            , value =
-                                                { path = file.path
-                                                , knowledge = check.inspectExtraFile file
-                                                }
-                                            }
-                                        )
-                                )
-                                (cache.extraFileKnowledgeByPath
-                                    |> dictRemoveKeys project.removedExtraFilePaths
-                                )
-                                Dict.empty
+                            project.addedOrChangedExtraFiles
+                                |> Array.foldl
+                                    (\file soFar ->
+                                        soFar
+                                            |> Dict.set file.path (check.inspectExtraFile file)
+                                    )
+                                    (project.removedExtraFilePaths
+                                        |> Array.foldl Dict.remove cache.extraFileKnowledgeByPath
+                                    )
                         
                         combinedKnowledge : knowledge
                         combinedKnowledge =
@@ -470,12 +444,6 @@ knowledgeCacheEmpty =
     , moduleKnowledgeByPath = Dict.empty
     , extraFileKnowledgeByPath = Dict.empty
     }
-
-
-dictRemoveKeys : Array comparableKey -> (Dict comparableKey v -> Dict comparableKey v)
-dictRemoveKeys listOfKeysToRemove dict =
-    listOfKeysToRemove
-        |> Array.foldl Dict.remove dict
 
 
 {-| A problem to report in a given file and region, possibly suggesting a fix with [`SourceEdit`](#SourceEdit)s

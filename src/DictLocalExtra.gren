@@ -47,44 +47,27 @@ flatToArrayMap keyValueToElement dict =
 
 
 unionWith :
-    (v -> v -> v)
-    -> Dict comparable v
-    -> Dict comparable v
-    -> Dict comparable v
-unionWith valueABMerge aDict bDict =
-    if (aDict |> Dict.count) > (bDict |> Dict.count) then
-        Dict.foldl
-            (\key b soFar ->
-                soFar
-                    |> Dict.update key
-                        (\existingValueAtKey ->
-                            when existingValueAtKey is
-                                Nothing ->
-                                    b |> Just
-
+    (a -> a -> a)
+    -> Dict comparable a
+    -> Dict comparable a
+    -> Dict comparable a
+unionWith valueABMerge bDict aDict =
+    -- can be optimized
+    Dict.foldl
+        (\key b soFar ->
+            soFar
+                |> Dict.update key
+                    (\maybeExistingA ->
+                        Just
+                            (when maybeExistingA is
+                                Nothing -> b
                                 Just a ->
-                                    valueABMerge a b |> Just
-                        )
-            )
-            aDict
-            bDict
-
-    else
-        Dict.foldl
-            (\key a soFar ->
-                soFar
-                    |> Dict.update key
-                        (\existingValueAtKey ->
-                            when existingValueAtKey is
-                                Nothing ->
-                                    a |> Just
-
-                                Just b ->
-                                    valueABMerge a b |> Just
-                        )
-            )
-            bDict
-            aDict
+                                    valueABMerge a b
+                            )
+                    )
+        )
+        aDict
+        bDict
 
 
 firstJustMap : (key -> value -> Maybe found) -> Dict key value -> Maybe found
