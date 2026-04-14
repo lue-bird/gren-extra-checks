@@ -124,26 +124,29 @@ moduleDataToKnowledge moduleData =
                         { fullQualification = "Debug", exposes = [] }
                     )
 
-        moduleDeclaredValueOrFunctionNames : Set.Set String
-        moduleDeclaredValueOrFunctionNames =
+        moduleDeclaredVariableNames : Dict.Dict String SourcePosition.Region
+        moduleDeclaredVariableNames =
             moduleData.syntax.values
                 |> Array.foldl
                     (\valueOrFunctionDeclaration soFar ->
-                        soFar |> Set.set valueOrFunctionDeclaration.value.value.name.value
+                        soFar
+                            |> Dict.set valueOrFunctionDeclaration.value.value.name.value
+                                (valueOrFunctionDeclaration.value.value.name |> locatedRegion)
                     )
-                    Set.empty
+                    Dict.empty
 
         debugUses =
             moduleData.syntax.values
                 |> Array.foldl
-                    (\valueOrFunctionDeclaration soFarAcrossDeclarations ->
-                        valueOrFunctionDeclaration.value.value.body
-                            |> expressionUsedReferencesFold
+                    (\variableDeclaration soFarAcrossDeclarations ->
+                        variableDeclaration.value.value.body
+                            |> expressionUsedReferencesFoldExcludingLocalVariables
+                                (variableDeclaration.value.value.args
+                                    |> ExtraCheck.patternArrayVariablesIntoDict
+                                        moduleDeclaredVariableNames
+                                )
                                 (\reference referenceRegion soFar ->
-                                    if
-                                        (reference |> referenceIsImportedFrom debugImport)
-                                            && Basics.not (reference.qualification == "" && Set.member reference.name moduleDeclaredValueOrFunctionNames)
-                                    then
+                                    if reference |> referenceIsImportedFrom debugImport then
                                         when reference.name is
                                             "toString" ->
                                                 { debugLogUses = soFar.debugLogUses
@@ -185,6 +188,7 @@ moduleDataToKnowledge moduleData =
     in
     if (debugLogUses |> Array.isEmpty) && (debugTodoUses |> Array.isEmpty) && (debugToStringUses |> Array.isEmpty) then
         knowledgeNone
+
     else
         Dict.singleton moduleData.path
             { debugLogUses = debugLogUses
@@ -285,17 +289,22 @@ report knowledge =
         |> Array.Builder.toArray
 
 
-expressionUsedReferencesFold :
-    ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
+expressionUsedReferencesFoldExcludingLocalVariables :
+    Dict.Dict String SourcePosition.Region
+    -> ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
     -> state
     -> Compiler.Ast.Source.Expression
     -> state
-expressionUsedReferencesFold reduceWithReference initialState expression =
+expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithReference initialState expression =
     when expression.value is
         Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
-            initialState
-                |> reduceWithReference { qualification = "", name = variable }
-                    { start = expression.start, end = expression.end }
+            if localVariables |> Dict.member variable then
+                initialState
+
+            else
+                initialState
+                    |> reduceWithReference { qualification = "", name = variable }
+                        { start = expression.start, end = expression.end }
         
         Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
             initialState
@@ -303,13 +312,23 @@ expressionUsedReferencesFold reduceWithReference initialState expression =
                     { start = expression.start, end = expression.end }
         
         expressionNotVariable ->
-            -- TODO when encountering newly-introduced local variables, add them to variablesToExclude
             expressionNotVariable
-                |> ExtraCheck.expressionImmediateSubsFold
-                    (\sub soFar ->
-                        sub |> expressionUsedReferencesFold reduceWithReference soFar
+                |> ExtraCheck.expressionImmediateSubsFoldWithIntroducedVariables
+                    localVariables
+                    (\sub localVariablesForSub soFar ->
+                        sub
+                            |> expressionUsedReferencesFoldExcludingLocalVariables
+                                localVariablesForSub
+                                reduceWithReference
+                                soFar
                     )
                     initialState
+
+
+locatedRegion : SourcePosition.Located value -> SourcePosition.Region
+locatedRegion located =
+    { start = located.start, end = located.end }
+
 
 {-| Do not use if short-cutting is likely
 -}

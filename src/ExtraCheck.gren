@@ -4,7 +4,8 @@ module ExtraCheck exposing
     , Error, grenJsonPath
     , SourceEdit, insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
-    , expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
+    , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
+    , patternVariablesIntoDict, patternArrayVariablesIntoDict
     , moduleExposes, exposedArrayToExposes
     , sourceExtractInRange, sourceRegionsOf
     , outlineExposedModuleNameSet
@@ -62,7 +63,8 @@ E.g. to find all `as` pattern regions
 (In practice you should use an Array.Builder instead of Array here.)
 This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
 
-@docs expressionImmediateSubsFold, patternImmediateSubsFold, typeImmediateSubsFold
+@docs expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
+@docs patternVariablesIntoDict, patternArrayVariablesIntoDict
 @docs determineModuleOrigin, importsToExplicit
 @docs moduleExposes, exposedArrayToExposes
 @docs sourceExtractInRange, sourceRegionsOf
@@ -87,7 +89,7 @@ Implementing a check works really well in a Test-Driven loop:
 
 Then repeat for every when that needs to be handled.
 Ideally, by only reading through the test titles, someone else should be able to
-recreate the rule you are testing.
+recreate the check you are testing.
 
 Tests are cheap and it is better to have too many tests rather than too few,
 since the behavior of a check rarely changes drastically.
@@ -245,14 +247,13 @@ The module's
 (`import Html as H exposing (div)`) in order of their definition.
 A nice helper to get the exposes: [`exposedArrayToExposes`](#exposedArrayToExposes)
 
-An example check that forbids importing both `Element` (`gren-ui`) and
-`Html.Styled` (`gren-css`) in the same module:
+An example check that forbids importing both `Element` and
+`Html.Styled` in the same module:
 
-    import Gren.Syntax.Import
-    import Gren.Syntax.Node
-    import Gren.Syntax.Range
+    import SourcePosition
     import ExtraCheck
     import Dict
+    import Array.Builder
 
     check : ExtraCheck.Check
     check =
@@ -263,19 +264,21 @@ An example check that forbids importing both `Element` (`gren-ui`) and
                         importedModuleNames : Dict String SourcePosition.Region
                         importedModuleNames =
                             moduleData.syntax.imports
-                                |> Array.map
-                                    (\(SourcePosition.Located _ import_) ->
-                                        ( import.moduleName |> Gren.Syntax.Node.value, import.moduleName |> Gren.Syntax.Node.region )
+                                |> Array.foldl
+                                    (\{ value = import_ } soFar ->
+                                        soFar
+                                            |> Dict.set import_.module_.value
+                                                (import_.module_ |> ExtraCheck.locatedRegion)
                                     )
-                                |> Dict.fromList
+                                    Dict.empty
                     in
                     when
-                        Maybe.map2 (\elementImportRange _ -> elementImportRange)
-                            (importedModuleNames |> Dict.get [ "Element" ])
-                            (importedModuleNames |> Dict.get [ "Html", "Styled" ])
+                        Maybe.map2 (\elementImportRegion _ -> elementImportRegion)
+                            (importedModuleNames |> Dict.get "Element")
+                            (importedModuleNames |> Dict.get "Html.Styled")
                     is
-                        Just elementImportRange ->
-                            Dict.singleton moduleData.path elementImportRange
+                        Just elementImportRegion ->
+                            Dict.singleton moduleData.path elementImportRegion
 
                         _ ->
                             Dict.empty
@@ -286,17 +289,23 @@ An example check that forbids importing both `Element` (`gren-ui`) and
             , report =
                 \invalidImportsByPath ->
                     invalidImportsByPath
-                        |> Dict.toList
-                        |> Array.map
-                            (\{ key = path, value = elementImportRange } ->
-                                { path = moduleData.path
-                                , message = "both `gren-ui` and `gren-css` used"
-                                , details = [ "At fruits.com, we use `gren-ui` in the dashboard application, and `gren-css` in the rest of the code. We want to use `gren-ui` in our new projects, but in projects using `gren-css`, we don't want to use both libraries to keep things simple." ]
-                                , region = elementImportRange
-                                , fix = []
-                                }
+                        |> Dict.foldl
+                            (\{ key = path, value = elementImportRange } soFar ->
+                                soFar
+                                    |> Array.Builder.pushLast
+                                        { path = moduleData.path
+                                        , message = "both `Element` and `Html.Styled` used"
+                                        , details = [ "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple." ]
+                                        , region = elementImportRange
+                                        , fix = []
+                                        }
                             )
+                            (Array.Builder.empty 0)
+                        |> Array.Builder.toArray
             }
+
+For more complex examples of checks,
+check out the checks in this package like [`DebugIsNotUsed.check`](DebugIsNotUsed#check)
 
 -}
 create :
@@ -479,7 +488,7 @@ Take the gren compiler errors as inspiration in terms of helpfulness:
   - error `details`: additional information such as the rationale and suggestions
     for a solution or alternative
   - error report `region`: The region marked as problematic. Make this section as small as
-    possible. For instance, in a rule that would forbid
+    possible. For instance, in a check that would forbid
     `Debug.log`, you would want the error to appear at `Debug.log`, not on the whole
     function call
 
@@ -652,7 +661,7 @@ outlineExposedModuleNameSet : Compiler.Outline.Exposed -> Set String
 outlineExposedModuleNameSet exposed =
     when exposed is 
         Compiler.Outline.ExposedArray array ->
-            array |> setFromListMap Compiler.ModuleName.toString
+            array |> setFromArrayMap Compiler.ModuleName.toString
 
         Compiler.Outline.ExposedDict dict ->
             dict
@@ -693,7 +702,7 @@ moduleExposes syntaxFile =
                         soFar
                             |> Dict.set choiceTypeDeclaration.value.value.name.value
                                 (choiceTypeDeclaration.value.value.variants
-                                    |> setFromListMap
+                                    |> setFromArrayMap
                                         (\variant -> variant.value.name.value)
                                 )
                     )
@@ -1035,11 +1044,11 @@ implicitImports =
             , "Never"
             , "never"
             ]
-                |> setFromList
+                |> setFromArray
         }
-    |> Dict.set "Array" { alias = Nothing, exposes = setFromList [ "Array" ] }
-    |> Dict.set "Maybe" { alias = Nothing, exposes = setFromList [ "Maybe", "Just", "Nothing" ] }
-    |> Dict.set "Result" { alias = Nothing, exposes = setFromList [ "Result", "Ok", "Err" ] }
+    |> Dict.set "Array" { alias = Nothing, exposes = setFromArray [ "Array" ] }
+    |> Dict.set "Maybe" { alias = Nothing, exposes = setFromArray [ "Maybe", "Just", "Nothing" ] }
+    |> Dict.set "Result" { alias = Nothing, exposes = setFromArray [ "Result", "Ok", "Err" ] }
     |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
     |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
     |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
@@ -1710,7 +1719,7 @@ invalidExpectedErrorsIn project expectedErrors =
 
         projectPathsExceptGrenJson : Set String
         projectPathsExceptGrenJson =
-            project.files |> setFromListMap .path
+            project.files |> setFromArrayMap .path
 
         pathIsModule : String -> Bool
         pathIsModule path =
@@ -2456,7 +2465,7 @@ unchangedSourceAfterFix error =
                I expected the fix to make some changes to the source, but it resulted
                in the same source as before the fixes.
                
-               This is problematic because I will tell the user that this rule provides an
+               This is problematic because I will tell the user that this check provides an
                automatic fix, but I will have to disappoint them when I later find out it
                doesn't do anything.
                """
@@ -2656,7 +2665,8 @@ patternImmediateSubsFold reduce initialState parentExpression =
         Compiler.Ast.Source.PStr _ -> initialState
         Compiler.Ast.Source.PAnything _ -> initialState
         Compiler.Ast.Source.PVar _ -> initialState
-        Compiler.Ast.Source.PAlias alias -> initialState |> reduce alias.pattern
+        Compiler.Ast.Source.PAlias alias ->
+            initialState |> reduce alias.pattern
         Compiler.Ast.Source.PCtor variant ->
             when variant.arg is
                 Nothing ->
@@ -2687,7 +2697,8 @@ patternImmediateSubsFold reduce initialState parentExpression =
                     initialState
 
 
-{-| Walk immediate child-expressions, collecting information on the way
+{-| Walk immediate child-expressions, collecting information on the way.
+To additionally track locally introduced variables, use [`expressionImmediateSubsFoldWithIntroducedVariables`](#expressionImmediateSubsFoldWithIntroducedVariables)
 -}
 expressionImmediateSubsFold :
     (Compiler.Ast.Source.Expression -> state -> state)
@@ -2768,22 +2779,220 @@ expressionImmediateSubsFold reduce initialState parentExpression =
                     )
 
 
-setFromList : Array comparableElement -> Set comparableElement
-setFromList list =
-    list
+{-| Walk immediate child-expressions,
+tracking what new bindings have been added to the name scope for each sub-expression,
+collecting information on the way.
+
+Don't forget to include function declaration parameter variables in the given dict
+using [`patternArrayVariablesIntoDict`](#patternArrayVariablesIntoDict).
+
+Knowing local variable names in all parts of an expression
+is useful for knowing if a variable refers to an import-exposed (or implicitly imported) name
+or is unrelated.
+When you want to fix code by inserting references like `identity`,
+first check for local variables and if necessary insert `Basics/WhateverImportAliasIsUsed.identity` instead.
+-}
+expressionImmediateSubsFoldWithIntroducedVariables :
+    Dict String SourcePosition.Region
+    -> (Compiler.Ast.Source.Expression -> Dict String SourcePosition.Region -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Expression_
+    -> state
+expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce initialState parentExpression =
+    when parentExpression is
+        Compiler.Ast.Source.NumberLiteral _ -> initialState
+        Compiler.Ast.Source.CharLiteral _ -> initialState
+        Compiler.Ast.Source.StringLiteral _ -> initialState
+        Compiler.Ast.Source.Var _ ->
+            initialState
+        Compiler.Ast.Source.VarQual _ ->
+            initialState
+        Compiler.Ast.Source.Accessor _ ->
+            initialState
+        Compiler.Ast.Source.Operator _ ->
+            initialState
+        Compiler.Ast.Source.Parens inParens ->
+            initialState |> reduce inParens initialLocalVariables
+        Compiler.Ast.Source.Negate inNegation ->
+            initialState |> reduce inNegation initialLocalVariables
+        Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
+            initialState
+                |> reduce result
+                    (patternArrayVariablesIntoDict initialLocalVariables parameters)
+        Compiler.Ast.Source.Access { accessor = _, expression = record } ->
+            initialState |> reduce record initialLocalVariables
+        Compiler.Ast.Source.ArrayLiteral elements ->
+            elements
+                |> Array.foldl
+                    (\element soFar -> soFar |> reduce element initialLocalVariables)
+                    initialState
+        Compiler.Ast.Source.Record fields ->
+            fields
+                |> Array.foldl
+                    (\field soFar -> soFar |> reduce field.value initialLocalVariables)
+                    initialState
+        Compiler.Ast.Source.Update recordUpdate ->
+            recordUpdate.newValues
+                |> Array.foldl
+                    (\field soFar -> soFar |> reduce field.value initialLocalVariables)
+                    (initialState
+                        |> reduce recordUpdate.record initialLocalVariables
+                    )
+        Compiler.Ast.Source.Binops { left = left, operator = _, right = right } ->
+            initialState
+                |> reduce left initialLocalVariables
+                |> reduce right initialLocalVariables
+        Compiler.Ast.Source.If ifThenElse ->
+            ifThenElse.branches
+                |> Array.foldl
+                    (\ifThen soFar ->
+                        soFar
+                            |> reduce ifThen.test initialLocalVariables
+                            |> reduce ifThen.body initialLocalVariables
+                    )
+                    initialState
+                |> reduce ifThenElse.elseBranch initialLocalVariables
+        Compiler.Ast.Source.Call call ->
+            call.args
+                |> Array.foldl
+                    (\arg soFar -> soFar |> reduce arg initialLocalVariables)
+                    (initialState
+                        |> reduce call.fn initialLocalVariables
+                    )
+        Compiler.Ast.Source.Let letIn ->
+            let
+                localVariablesIncludingAcrossDefines : Dict String SourcePosition.Region
+                localVariablesIncludingAcrossDefines =
+                    letIn.defs
+                        |> Array.foldl
+                            (\def soFar ->
+                                when def.value is
+                                    Compiler.Ast.Source.Destruct destruct ->
+                                        patternVariablesIntoDict soFar destruct.pattern
+                                    Compiler.Ast.Source.Define define ->
+                                        soFar
+                                            |> Dict.set define.name.value 
+                                                { start = define.name.start, end = define.name.end }
+                            )
+                            initialLocalVariables
+            in
+            letIn.defs
+                |> Array.foldl
+                    (\def soFar ->
+                        when def.value is
+                            Compiler.Ast.Source.Destruct destruct ->
+                                soFar
+                                    |> reduce
+                                        destruct.body
+                                        localVariablesIncludingAcrossDefines
+                            Compiler.Ast.Source.Define define ->
+                                soFar
+                                    |> reduce
+                                        define.body
+                                        (patternArrayVariablesIntoDict
+                                            localVariablesIncludingAcrossDefines
+                                            define.args
+                                        )
+                    )
+                    initialState
+                |> reduce letIn.body localVariablesIncludingAcrossDefines
+        Compiler.Ast.Source.When whenIs ->
+            whenIs.branches
+                |> Array.foldl
+                    (\case soFar ->
+                        soFar
+                            |> reduce case.body
+                                (patternVariablesIntoDict initialLocalVariables case.pattern)
+                    )
+                    (initialState
+                        |> reduce whenIs.expression initialLocalVariables
+                    )
+
+
+{-| Fill the given dict with all the bindings contained (deep) within
+the given patterns
+-}
+patternArrayVariablesIntoDict :
+    Dict String SourcePosition.Region
+    -> Array Compiler.Ast.Source.Pattern
+    -> Dict String SourcePosition.Region
+patternArrayVariablesIntoDict initialDict patterns =
+    patterns
+        |> Array.foldl
+            (\pattern soFar -> patternVariablesIntoDict soFar pattern)
+            initialDict
+
+
+{-| Fill the given dict with all the bindings contained (deep) within
+the given pattern
+-}
+patternVariablesIntoDict :
+    Dict String SourcePosition.Region
+    -> Compiler.Ast.Source.Pattern
+    -> Dict String SourcePosition.Region
+patternVariablesIntoDict initialDict pattern =
+    -- I haven't actually measured whether it is faster to construct and reduce union
+    -- small Dicts or to construct a big one. I assume it should be the big one though
+    -- because less objects are created and (I think) more comparisons are happening
+    when pattern.value is
+        Compiler.Ast.Source.PInt _ -> initialDict
+        Compiler.Ast.Source.PChr _ -> initialDict
+        Compiler.Ast.Source.PStr _ -> initialDict
+        Compiler.Ast.Source.PAnything _ -> initialDict
+        Compiler.Ast.Source.PVar variableName ->
+            initialDict |> Dict.set variableName { start = pattern.start, end = pattern.end }
+        Compiler.Ast.Source.PAlias alias ->
+            patternVariablesIntoDict initialDict alias.pattern
+        Compiler.Ast.Source.PCtor variant ->
+            when variant.arg is
+                Nothing ->
+                    initialDict
+
+                Just value ->
+                    patternVariablesIntoDict initialDict value
+        Compiler.Ast.Source.PCtorQual variant ->
+            when variant.arg is
+                Nothing ->
+                    initialDict
+
+                Just value ->
+                    patternVariablesIntoDict initialDict value
+        Compiler.Ast.Source.PArray elements ->
+            elements
+                |> Array.foldl
+                    (\element soFar -> patternVariablesIntoDict soFar element)
+                    initialDict
+        Compiler.Ast.Source.PRecord fields ->
+            fields
+                |> Array.foldl
+                    (\field soFar ->
+                        when field.pattern is
+                            Nothing ->
+                                soFar
+
+                            Just fieldValue ->
+                                patternVariablesIntoDict soFar fieldValue
+                    )
+                    initialDict
+
+
+setFromArray : Array comparableElement -> Set comparableElement
+setFromArray array =
+    array
         |> Array.foldl
             (\element acc -> acc |> Set.set element)
             Set.empty
 
 
-setFromListMap : (element -> comparableElement) -> Array element -> Set comparableElement
-setFromListMap toComparable list =
-    list
+setFromArrayMap : (element -> comparableElement) -> Array element -> Set comparableElement
+setFromArrayMap toComparable array =
+    array
         |> Array.foldl
             (\element acc ->
                 acc |> Set.set (element |> toComparable)
             )
             Set.empty
+
 
 arrayLastMap : (a -> a) -> Array a -> Array a
 arrayLastMap mapper array =
