@@ -225,9 +225,13 @@ readGrenPackage fileSystemPermission cacheRoot { name, version } =
 
 readFileString : FileSystem.Permission -> FileSystem.Path.Path -> Task.Task String String
 readFileString fileSystemPermission path =
-    FileSystem.readFile fileSystemPermission
-        path
-        |> Task.mapError (\_ -> "file system error, reading " ++ (path |> FileSystem.Path.toPosixString))
+    FileSystem.readFile fileSystemPermission path
+        |> Task.mapError
+            (\fileSystemError ->
+                "file system error: "
+                    ++ (fileSystemError |> FileSystem.errorToString)
+                    ++ ", reading "
+                    ++ (path |> FileSystem.Path.toPosixString))
         |> Task.andThen
             (\bytes ->
                 when Bytes.toString bytes is
@@ -292,7 +296,12 @@ initialInfoTask :
 initialInfoTask { extraPaths, fileSystemPermission, platform } =
     FileSystem.readFile fileSystemPermission
         (FileSystem.Path.fromPosixString "../gren.json")
-        |> Task.mapError (\_ -> "file system error, reading ../gren.json")
+        |> Task.mapError
+            (\fileSystemError ->
+                "file system error: "
+                    ++ (fileSystemError |> FileSystem.errorToString)
+                    ++ ", reading ../gren.json"
+            )
         |> Task.andThen
             (\bytes ->
                 when Bytes.toString bytes is
@@ -362,8 +371,10 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                             |> Task.mapError
                                 (\error ->
                                     when error is
-                                        Compiler.Outline.FileSystemError _ ->
-                                            "file system error, reading gren source files in .."
+                                        Compiler.Outline.FileSystemError fileSystemError ->
+                                            "file system error: "
+                                                ++ (fileSystemError |> FileSystem.errorToString)
+                                                ++ ", reading gren source files in .."
                                         Compiler.Outline.FilePathInvalidModuleName { path, inferredModuleName } ->
                                             "invalid file module name, reading gren source file "
                                                 ++ (path |> FileSystem.Path.toPosixString)
@@ -1000,36 +1011,36 @@ update config event stateOrExited =
 
                             FileSystem.Moved (Just subPath) ->
                                 let
-                                    removedOrAddedModulePath =
-                                        FileSystem.Path.fromPosixString extraPath |> FileSystem.Path.append subPath
+                                    removedOrAddedExtraPath =
+                                        FileSystem.Path.fromPosixString extraPath |> filePathAppendSubPathIfNotEqual subPath
                                 in
                                 readFileString state.fileSystemPermission
                                     (FileSystem.Path.fromPosixString ".."
-                                        |> FileSystem.Path.append removedOrAddedModulePath
+                                        |> FileSystem.Path.append removedOrAddedExtraPath
                                     )
                                     |> Task.attempt
                                         (\result ->
                                             when result is
                                                 -- improvement possibility: distinguish file system error and string conversion error
                                                 Err _ ->
-                                                    ExtraFileRemoved { path = removedOrAddedModulePath }
+                                                    ExtraFileRemoved { path = removedOrAddedExtraPath }
                                                 
                                                 Ok source ->
-                                                    ExtraFileAddedOrChanged { path = removedOrAddedModulePath, source = Ok source }
+                                                    ExtraFileAddedOrChanged { path = removedOrAddedExtraPath, source = Ok source }
                                         )
                             
                             FileSystem.Changed (Just subPath) ->
                                 let
-                                    changedModulePath =
-                                        FileSystem.Path.fromPosixString extraPath |> FileSystem.Path.append subPath
+                                    changedExtraPath =
+                                        FileSystem.Path.fromPosixString extraPath |> filePathAppendSubPathIfNotEqual subPath
                                 in
                                 readFileString state.fileSystemPermission
                                     (FileSystem.Path.fromPosixString ".."
-                                        |> FileSystem.Path.append changedModulePath
+                                        |> FileSystem.Path.append changedExtraPath
                                     )
                                     |> Task.attempt
                                         (\sourceOrError ->
-                                            ExtraFileAddedOrChanged { path = changedModulePath, source = sourceOrError }
+                                            ExtraFileAddedOrChanged { path = changedExtraPath, source = sourceOrError }
                                         )
                     }
 
@@ -1176,6 +1187,15 @@ update config event stateOrExited =
                     }
 
 
+filePathAppendSubPathIfNotEqual : FileSystem.Path.Path -> FileSystem.Path.Path -> FileSystem.Path.Path
+filePathAppendSubPathIfNotEqual subPath basePath =
+    if basePath == subPath then
+        basePath
+
+    else
+        basePath |> FileSystem.Path.append subPath
+
+
 noErrorsWaitingForChanges { stdin, stdout } =
     -- TODO if not in interactive terminal, exit
     Stream.Log.line stdout
@@ -1306,7 +1326,7 @@ reviewRunList checks project =
         runResultsForReviews
             |> Array.foldl
                 (\runResultForReview soFar ->
-                    DictLocalExtra.unionWith (\new already -> new ++ already)
+                    DictLocalExtra.unionWith (\already new -> new ++ already)
                         runResultForReview.errorsByPath
                         soFar
                 )
