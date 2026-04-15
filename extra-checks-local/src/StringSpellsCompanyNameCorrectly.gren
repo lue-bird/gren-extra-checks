@@ -60,7 +60,7 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
                 |> Array.Builder.append            
                     (string
                         |> ExtraCheck.sourceRegionsOf "frits.com"
-                        |> Array.map (rangeRelativeTo expression.start)
+                        |> Array.map (regionRelativeTo expression.start)
                     )
 
         _ ->
@@ -72,13 +72,13 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
                     resultRegionsSoFar
 
 
-rangeRelativeTo :
+regionRelativeTo :
     SourcePosition.Position
     -> SourcePosition.Region
     -> SourcePosition.Region
-rangeRelativeTo baseStart offsetRange =
-    { start = offsetRange.start |> locationRelativeTo baseStart
-    , end = offsetRange.end |> locationRelativeTo baseStart
+regionRelativeTo baseStart offsetRegion =
+    { start = offsetRegion.start |> locationRelativeTo baseStart
+    , end = offsetRegion.end |> locationRelativeTo baseStart
     }
 
 

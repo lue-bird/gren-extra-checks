@@ -7,9 +7,9 @@ module ExtraCheck exposing
     , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
     , patternVariablesIntoDict, patternArrayVariablesIntoDict
     , moduleExposes, exposedArrayToExposes
-    , locatedRegion, sourceExtractInRange, sourceRegionsOf
+    , locatedRegion, sourceExtractInRegion, sourceRegionsOf
     , outlineExposedModuleNameSet
-    , expectToReport, applicationConfigurationMinimal, ExpectedErrorRange(..)
+    , expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
     )
 
@@ -67,7 +67,7 @@ This fine control allows you to e.g. skip visiting certain parts that you alread
 @docs patternVariablesIntoDict, patternArrayVariablesIntoDict
 @docs determineModuleOrigin, importsToExplicit
 @docs moduleExposes, exposedArrayToExposes
-@docs locatedRegion, sourceExtractInRange, sourceRegionsOf
+@docs locatedRegion, sourceExtractInRegion, sourceRegionsOf
 @docs outlineExposedModuleNameSet
 
 Suggestions to add, remove or change helpers welcome!
@@ -94,7 +94,7 @@ recreate the check you are testing.
 Tests are cheap and it is better to have too many tests rather than too few,
 since the behavior of a check rarely changes drastically.
 
-@docs expectToReport, applicationConfigurationMinimal, ExpectedErrorRange
+@docs expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion
 
 
 # running
@@ -227,7 +227,7 @@ grenJsonPath =
 
   - `inspectModule`: collect knowledge from module syntax. More info below
   - `inspectGrenJson`: collect knowledge from the [gren.json project config](https://packages.gren-lang.org/package/gren-lang/compiler-node/version/latest/module/Compiler.Outline#Outline).
-    You can use the raw source to [search for a section](#sourceRangesOf) you want to highlight in an [`Error`](#Error)
+    You can use the raw source to [search for a section](#sourceRegionsOf) you want to highlight in an [`Error`](#Error)
   - `inspectExtraFile`: collect knowledge from an available files like README.md, CHANGELOG.md or package.json that aren't source modules or the gren.json.
     The provided path is relative to the project's `gren.json`
     and can be used as an [`Error`](#Error) target file path
@@ -242,7 +242,7 @@ and can be used as an [`Error`](#Error) target file path.
 The raw gren file source can be used
 to preserve existing formatting in a region
 in when you want to move and copy things around,
-see [`sourceExtractInRange`](#sourceExtractInRange).
+see [`sourceExtractInRegion`](#sourceExtractInRegion).
 
 The `syntax` field contains a tree-like structure which represents your source code:
 [`Compiler.Ast.Source.Module`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.Ast.Source#Module).
@@ -296,13 +296,13 @@ An example check that forbids importing both `Element` and
                 \invalidImportsByPath ->
                     invalidImportsByPath
                         |> Dict.foldl
-                            (\{ key = path, value = elementImportRange } soFar ->
+                            (\{ key = path, value = elementImportRegion } soFar ->
                                 soFar
                                     |> Array.Builder.pushLast
                                         { path = moduleData.path
                                         , message = "both `Element` and `Html.Styled` used"
                                         , details = "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple."
-                                        , region = elementImportRange
+                                        , region = elementImportRegion
                                         , fix = []
                                         }
                             )
@@ -604,8 +604,8 @@ locatedRegion located =
 {-| In when you need the read the source in a region as formatted by the user.
 This can be nice to keep the user's formatting if you just move code around
 -}
-sourceExtractInRange : SourcePosition.Region -> String -> String
-sourceExtractInRange region string =
+sourceExtractInRegion : SourcePosition.Region -> String -> String
+sourceExtractInRegion region string =
     -- can be optimized
     string
         |> String.lines
@@ -1114,15 +1114,15 @@ type alias SourceEdit =
 {-| Remove the section in between a given region
 -}
 removeRegion : SourcePosition.Region -> SourceEdit
-removeRegion rangeToRemove =
-    replaceRegion rangeToRemove ""
+removeRegion regionToRemove =
+    replaceRegion regionToRemove ""
 
 
-{-| Replace the section in between a given range by something
+{-| Replace the section in between a given region by something
 -}
 replaceRegion : SourcePosition.Region -> String -> SourceEdit
-replaceRegion range replacement =
-    { region = range, replacement = replacement }
+replaceRegion region replacement =
+    { region = region, replacement = replacement }
 
 
 {-| Insert something at the given position
@@ -1136,7 +1136,7 @@ insertAt location toInsert =
 -}
 type SourceEditError
     = AfterFixIsUnchanged
-    | FixHasCollisionsInRanges
+    | FixHasCollisionsInRegions
 
 
 {-| Try to apply a set of [`SourceEdit`](#SourceEdit)es to the relevant file source,
@@ -1144,8 +1144,8 @@ potentially failing with a [`SourceEditError`](#SourceEditError)
 -}
 sourceApplyEdits : Array SourceEdit -> String -> Result SourceEditError String
 sourceApplyEdits fixes sourceCode =
-    if fixes |> sourceEditsContainRangeCollisions then
-        Err FixHasCollisionsInRanges
+    if fixes |> sourceEditsContainRegionCollisions then
+        Err FixHasCollisionsInRegions
 
     else
         let
@@ -1209,17 +1209,17 @@ applyFixSingle replace lines =
         ++ linesAfter
 
 
-sourceEditsContainRangeCollisions : Array SourceEdit -> Bool
-sourceEditsContainRangeCollisions fixes =
+sourceEditsContainRegionCollisions : Array SourceEdit -> Bool
+sourceEditsContainRegionCollisions fixes =
     fixes
         |> arrayAnyPair
             (\edit0 edit1 ->
-                rangesCollide edit0.region edit1.region
+                regionsCollide edit0.region edit1.region
             )
 
 
-rangesCollide : SourcePosition.Region -> SourcePosition.Region -> Bool
-rangesCollide a b =
+regionsCollide : SourcePosition.Region -> SourcePosition.Region -> Bool
+regionsCollide a b =
     when sourcePositionCompare a.end b.start is
         LT ->
             False
@@ -1324,16 +1324,16 @@ type alias SuccessfulRunResult =
 type alias ExpectedFileError =
     { message : String
     , details : String
-    , region : ExpectedErrorRange
+    , region : ExpectedErrorRegion
     , fixedFiles : Array { path : String, source : String }
     }
 
 
-{-| An expectation for the reported error range.
+{-| An expectation for the reported error region.
 If the section to mark is unique in the source, use `Under "your section source"`.
 If the section occurs multiple times in the source, use `UnderExactly { section = "your section source", startingAt = { row = ..., col = ... } }`
 -}
-type ExpectedErrorRange
+type ExpectedErrorRegion
     = ExpectUnder String
     | ExpectUnderExactly { section : String, startingAt : SourcePosition.Position }
 
@@ -1409,7 +1409,7 @@ expectToReport :
         { path : String
         , message : String
         , details : String
-        , region : ExpectedErrorRange
+        , region : ExpectedErrorRegion
         , fixedFiles : Array { path : String, source : String }
         }
     ->
@@ -2023,14 +2023,14 @@ matchingConfidenceLevel source expectedErrorDetails reviewError =
     else
         when expectedErrorDetails.region is
             ExpectUnder under ->
-                if (source |> sourceExtractInRange reviewError.region) /= under then
+                if (source |> sourceExtractInRegion reviewError.region) /= under then
                     1
 
                 else
                     2
 
             ExpectUnderExactly underExactly ->
-                if (source |> sourceExtractInRange reviewError.region) /= underExactly.section then
+                if (source |> sourceExtractInRegion reviewError.region) /= underExactly.section then
                     1
 
                 else if underExactly.startingAt /= reviewError.region.start then
@@ -2108,7 +2108,7 @@ expectedErrorForMessage :
     { error_
         | message : String
         , details : String
-        , region : ExpectedErrorRange
+        , region : ExpectedErrorRegion
     }
     -> { message : String, details : String, under : String }
 expectedErrorForMessage expectedError =
@@ -2129,20 +2129,20 @@ checkMessageAppearsUnder :
     -> Expect.Expectation
 checkMessageAppearsUnder toCheck =
     let
-        errorSourceInRange : String
-        errorSourceInRange =
-            toCheck.source |> sourceExtractInRange toCheck.reviewError.region
+        errorSourceInRegion : String
+        errorSourceInRegion =
+            toCheck.source |> sourceExtractInRegion toCheck.reviewError.region
     in
     when toCheck.expected.region is
         ExpectUnder under ->
             Expect.all
                 [ \{} ->
-                    errorSourceInRange
+                    errorSourceInRegion
                         |> Expect.equal under
                         |> Expect.onFail
                             (underMismatch
                                 toCheck.reviewError
-                                { under = under, errorSourceInRange = errorSourceInRange }
+                                { under = under, errorSourceInRegion = errorSourceInRegion }
                             )
                 , \{} ->
                     when toCheck.source |> String.indices under is
@@ -2169,11 +2169,11 @@ checkMessageAppearsUnder toCheck =
         ExpectUnderExactly underExactly ->
             Expect.all
                 [ \{} ->
-                    errorSourceInRange
+                    errorSourceInRegion
                         |> Expect.equal underExactly.section
                         |> Expect.onFail
                             (underMismatch toCheck.reviewError
-                                { under = underExactly.section, errorSourceInRange = errorSourceInRange }
+                                { under = underExactly.section, errorSourceInRegion = errorSourceInRegion }
                             )
                 , \{} ->
                     toCheck.reviewError.region.start
@@ -2192,30 +2192,30 @@ checkMessageAppearsUnder toCheck =
                 {}
 
 
-underMismatch : { error_ | region : SourcePosition.Region, message : String, details : String } -> { under : String, errorSourceInRange : String } -> String
-underMismatch error range =
+underMismatch : { error_ | region : SourcePosition.Region, message : String, details : String } -> { under : String, errorSourceInRegion : String } -> String
+underMismatch error under =
     failureMessage "error location doesn't match"
         ("I found an error with the message\n\n  "
             ++ error.message
             ++ "\n\nand I was expecting it to be under\n\n  "
-            ++ (range.under |> formatSourceCode)
+            ++ (under.under |> formatSourceCode)
             ++ "\n\nbut I found it under\n\n  "
-            ++ (range.errorSourceInRange |> formatSourceCode)
-            ++ "\n\nHint: Maybe you're passing the range of a wrong node to the check error?"
+            ++ (under.errorSourceInRegion |> formatSourceCode)
+            ++ "\n\nHint: Maybe you're passing the region of a wrong Located value to the check error?"
         )
 
 
 wrongLocation : { error_ | region : SourcePosition.Region, message : String, details : String } -> SourcePosition.Region -> String -> String
-wrongLocation error range under =
+wrongLocation error region under =
     failureMessage "exact error location doesn't match"
         ("I was looking for the error with the message\n\n  "
             ++ error.message
             ++ "\n\nunder the code\n\n  "
             ++ (under |> formatSourceCode)
             ++ "\n\nand I found it, but the exact location you specified is not the one I found.\n\nI was expecting the error at\n\n  "
-            ++ (range.start |> locationToCodeString)
+            ++ (region.start |> positionToCodeString)
             ++ "\n\nbut I found it at\n\n  "
-            ++ (error.region.start |> locationToCodeString)
+            ++ (error.region.start |> positionToCodeString)
         )
 
 
@@ -2227,7 +2227,7 @@ locationIsMissingInSourceCode error under =
             ++ "\n\nand expecting to see it under\n\n  "
             ++ (under |> formatSourceCode)
             ++ "\n\nI found no locations where that code appeared.\n\nHint: I found the error at\n\n  "
-            ++ (error.region.start |> locationToCodeString)
+            ++ (error.region.start |> positionToCodeString)
             ++ "\n"
         )
 
@@ -2241,14 +2241,14 @@ locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
             ++ (under |> formatSourceCode)
             ++ "\n\nI found "
             ++ (occurrencesInSourceCode |> Array.length |> String.fromInt)
-            ++ " locations where that code appeared. Switch from ExtraCheck.ExpectUnder to ExtraCheck.ExpectUnderExactly to make the range you were targeting unambiguous.\n\nTip: I found them starting at:\n"
+            ++ " locations where that code appeared. Switch from ExtraCheck.ExpectUnder to ExtraCheck.ExpectUnderExactly to make the region you were targeting unambiguous.\n\nTip: I found them starting at:\n"
             ++ (occurrencesInSourceCode
                     |> Array.map
                         (\occurrence ->
                             "  - "
                                 ++ (occurrence
                                         |> startingLocationInSource sourceCode
-                                        |> locationToCodeString
+                                        |> positionToCodeString
                                    )
                         )
                     |> String.join "\n"
@@ -2356,7 +2356,7 @@ checkFixesAreCorrect toCheck =
 
 checkFileFixesAreCorrect :
     { expectedError_
-        | region : ExpectedErrorRange
+        | region : ExpectedErrorRegion
         , message : String
         , details : String
     }
@@ -2379,8 +2379,8 @@ checkFileFixesAreCorrect expectedError source expectedFixedSource reviewErrorEdi
         Err AfterFixIsUnchanged ->
             Just (unchangedSourceAfterFix expectedError)
 
-        Err FixHasCollisionsInRanges ->
-            Just (hasCollisionsInFixRanges expectedError)
+        Err FixHasCollisionsInRegions ->
+            Just (hasCollisionsInFixRegions expectedError)
 
 
 removeWhitespace : String -> String
@@ -2494,9 +2494,9 @@ unchangedSourceAfterFix error =
         )
 
 
-hasCollisionsInFixRanges : { error_ | message : String, details : String } -> String
-hasCollisionsInFixRanges error =
-    failureMessage "source edit ranges collide"
+hasCollisionsInFixRegions : { error_ | message : String, details : String } -> String
+hasCollisionsInFixRegions error =
+    failureMessage "source edit regions collide"
         ("When applying the fixes provided by the error with the message\n\n  "
             ++ error.message
             ++ """
@@ -2507,7 +2507,7 @@ hasCollisionsInFixRanges error =
                to apply first, and the result will be different and potentially invalid
                based on the order in which I apply these fixes.
                
-               For this reason, I require that the ranges (for replacing and removing) and
+               For this reason, I require that the regions (for replacing and removing) and
                the positions (for inserting) of every fix to be mutually exclusive.
                
                Hint: Maybe you duplicated a fix, or you targeted the wrong node for one
@@ -2572,19 +2572,19 @@ tooManyErrors path extraErrors =
             ++ (extraErrors
                     |> Array.map
                         (\error ->
-                            "  - " ++ error.message ++ "\n    at " ++ (error.region |> rangeToCodeString)
+                            "  - " ++ error.message ++ "\n    at " ++ (error.region |> regionToCodeString)
                         )
                     |> String.join "\n"
                )
         )
 
 
-rangeToCodeString : SourcePosition.Region -> String
-rangeToCodeString range =
+regionToCodeString : SourcePosition.Region -> String
+regionToCodeString region =
     "{ start = "
-        ++ (range.start |> locationToCodeString)
+        ++ (region.start |> positionToCodeString)
         ++ ", end = "
-        ++ (range.end |> locationToCodeString)
+        ++ (region.end |> positionToCodeString)
         ++ " }"
 
 
@@ -2628,12 +2628,12 @@ formatSourceCode string =
     formatSourceCodeWithFormatter identity (string |> String.lines)
 
 
-locationToCodeString : SourcePosition.Position -> String
-locationToCodeString location =
+positionToCodeString : SourcePosition.Position -> String
+positionToCodeString position =
     "{ row = "
-        ++ (location.row |> String.fromInt)
+        ++ (position.row |> String.fromInt)
         ++ ", col = "
-        ++ (location.col |> String.fromInt)
+        ++ (position.col |> String.fromInt)
         ++ " }"
 
 
