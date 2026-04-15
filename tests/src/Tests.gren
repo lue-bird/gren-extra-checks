@@ -3,6 +3,7 @@ module Tests exposing (tests)
 import ExtraCheck
 import DebugIsNotUsed
 import StringSpellsCompanyNameCorrectly
+import DocumentationDoesNotContainTodo
 import Test
 import Expect
 import Test.Runner
@@ -186,6 +187,246 @@ tests =
                     , check = DebugIsNotUsed.check
                     }
                         |> ExtraCheck.expectToReport []
+                )
+            ]
+        , Test.describe "DocumentationDoesNotContainTodo"
+            [ Test.test "in -- comment"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                -- TODO
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , -- TODO it seems this string is trimmed,
+              -- so regions might be inaccurate.
+              -- to offset this, we can for example
+              -- recover the trimmed whitespace by
+              -- checking the comment position in the
+              -- source code
+              Test.test "in --  comment with extra initial whitespace"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                --  TODO
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+                |> Test.skip
+            , Test.test "in {- comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                {- TODO -}
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , Test.test "in {-  comment -} with extra initial whitespace"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                {-  TODO -}
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+                |> Test.skip
+            , Test.test "in {-| module doc comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                {-| TODO -}
+                                --
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , Test.test "in {-| variable module declaration doc comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                {-| -}
+                                {-| TODO -}
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , Test.test "in {-| type alias module declaration doc comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (Str)
+                                {-| -}
+                                {-| TODO -}
+                                type alias Str = String
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , Test.test "in {-| choice type module declaration doc comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (Blank)
+                                {-| -}
+                                {-| TODO -}
+                                type Blank = Blank
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+            , Test.test "in {-| port module declaration doc comment -}"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                port module A exposing (a)
+                                {-| -}
+                                {-| TODO -}
+                                port a : String -> Cmd event 
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
                 )
             ]
         , Test.describe "StringSpellsCompanyNameCorrectly"

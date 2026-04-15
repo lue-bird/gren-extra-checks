@@ -1,6 +1,11 @@
 module Main exposing (main)
 
+{-| The extra checks actually used for this project
+using itself as a dependency
+-}
+
 import DebugIsNotUsed
+import DocumentationDoesNotContainTodo
 import StringSpellsCompanyNameCorrectly
 import ExtraChecksRunnerNode
 
@@ -10,6 +15,7 @@ main =
         { extraPaths = [ "README.md" ]
         , checks =
             [ DebugIsNotUsed.check
+            , DocumentationDoesNotContainTodo.check [ "TODO" ]
             , StringSpellsCompanyNameCorrectly.check
             ]
         }

@@ -5,6 +5,7 @@ import ExtraCheck
 import Compiler.Ast.Source
 import Compiler.Parse.Context
 import Array.Builder
+import Dict
 
 
 check : ExtraCheck.Check

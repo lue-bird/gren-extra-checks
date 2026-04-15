@@ -86,7 +86,7 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
                 |> Array.Builder.append            
                     (string
                         |> ExtraCheck.sourceRegionsOf "frits.com"
-                        |> Array.map (rangeRelativeTo expression.start)
+                        |> Array.map (regionRelativeTo expression.start)
                     )
 
         _ ->
@@ -98,13 +98,13 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
                     resultRegionsSoFar
 
 
-rangeRelativeTo :
+regionRelativeTo :
     SourcePosition.Position
     -> SourcePosition.Region
     -> SourcePosition.Region
-rangeRelativeTo baseStart offsetRange =
-    { start = offsetRange.start |> locationRelativeTo baseStart
-    , end = offsetRange.end |> locationRelativeTo baseStart
+regionRelativeTo baseStart offsetRegion =
+    { start = offsetRegion.start |> locationRelativeTo baseStart
+    , end = offsetRegion.end |> locationRelativeTo baseStart
     }
 
 
@@ -175,7 +175,7 @@ To sum up, a checklist
   - no LSP integration (shouldn't be too hard)
   - no ecosystem
   - the parser implemented in `gren-lang/compiler-common` is not on par with the haskell one.
-    It for example fails to parse top-level variable names starting with type, some long lines and negation in parens,
+    It for example fails to parse top-level variable names starting with type, is too strict on when is case indentation, cannot parse nested block comments, fails to parse some long lines and negation in parens,
     and is also massively slower
   - indirect dependencies are not indexed. There are no technical limitations on this AFAIK, so if you have a need for this (e.g. for generating code that needs info from distant dependency types)
   - the problem you encountered. Please [open an issue](https://github.com/lue-bird/gren-extra-checks/issues) <3

@@ -1,0 +1,407 @@
+module DocumentationDoesNotContainTodo exposing (check)
+
+{-|
+
+@docs check
+
+-}
+
+import ExtraCheck
+import Dict
+import Compiler.Ast.Source
+import DictLocalExtra
+import SourcePosition
+import Array.Builder
+import Compiler.Outline
+import String.Regex
+import Compiler.Parse.Context
+
+
+{-| Report a given set of words and symbols that have special meaning
+in your codebase like `REPLACEME`, `TODO`, `- [ ]`, `BUG`, `FIXME`.
+
+They will be looked for in all comments (line `--`, block and documentation),
+the gren.json summary and all extra files like the readme and changelog.
+
+These mark code that compiles and should be able to run but still requires
+attention in certain parts in the future.
+
+### not reported with `check [ "TODO" ]`
+
+    error =
+        { ...
+        , fix = [] -- consider removing the problematic call
+        }
+
+
+### reported with `check [ "TODO" ]`
+
+    error =
+        { ...
+        , fix = [] -- TODO consider removing the problematic call
+        }
+
+-}
+check : Array String -> ExtraCheck.Check
+check marks =
+    let
+        marksRegex : String.Regex.Regex
+        marksRegex =
+            String.Regex.fromString
+                (marks
+                    |> Array.map
+                        (\mark ->
+                            mark
+                                |> String.foldlUnits
+                                    (\unit soFar ->
+                                        if unit |> regexCharNeedsEscaping then
+                                            soFar ++ "\\" |> String.pushLast unit
+                                        else
+                                            soFar |> String.pushLast unit
+                                    )
+                                    ""
+                        )
+                    |> String.join "|"
+                )
+                |> Maybe.withDefault String.Regex.never
+    in
+    ExtraCheck.create
+        { inspectModule = \module_ -> inspectModule marksRegex module_
+        , inspectGrenJson = \grenJson -> inspectGrenJson marksRegex grenJson
+        , inspectExtraFile = \extraFile -> inspectExtraFile marksRegex extraFile
+        , inspectDirectDependencies = \_ -> knowledgeNone
+        , knowledgeMerge = knowledgeMerge
+        , report = report
+        }
+
+
+type alias Knowledge =
+    Dict.Dict
+        -- path
+        String
+        (Array
+            { mark : String
+            , region : SourcePosition.Region
+            }
+        )
+
+
+knowledgeNone : Knowledge
+knowledgeNone =
+    Dict.empty
+
+
+knowledgeMerge : Knowledge -> Knowledge -> Knowledge
+knowledgeMerge aKnowledge bKnowledge =
+    Dict.union aKnowledge bKnowledge
+
+
+inspectExtraFile :
+    String.Regex.Regex -> { path : String, source : String } -> Knowledge
+inspectExtraFile marksRegex extraFile =
+    when extraFile.source |> sourceOccurrencesOf marksRegex is
+        Nothing ->
+            knowledgeNone
+    
+        Just occurrences ->
+            Dict.singleton extraFile.path occurrences
+
+
+inspectGrenJson :
+   String.Regex.Regex
+    -> { source : String, outline : Compiler.Outline.Outline }
+    -> Knowledge
+inspectGrenJson marksRegex grenJson =
+    when grenJson.outline is
+        Compiler.Outline.App _ ->
+            knowledgeNone
+        
+        Compiler.Outline.Pkg packageOutline ->
+            if packageOutline.summary |> String.Regex.contains marksRegex then
+                Dict.singleton ExtraCheck.grenJsonPath
+                    (grenJson.source
+                        |> sourceOccurrencesOf marksRegex
+                        |> Maybe.withDefault []
+                    )
+
+            else
+                knowledgeNone
+
+
+inspectModule :
+    String.Regex.Regex
+    -> { path : String
+       , source : String
+       , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+       , syntax : Compiler.Ast.Source.Module
+       }
+    -> Knowledge
+inspectModule marksRegex module_ =
+    let
+        occurrences :
+            Array
+                { mark : String
+                , region : SourcePosition.Region
+                }
+        occurrences =
+            module_.comments
+                |> Dict.foldl
+                    (\line commentsInLine soFarAcrossCommentLines ->
+                        commentsInLine
+                            |> Array.foldl
+                                (\comment soFarAcrossComments ->
+                                    comment.value
+                                        |> commentValueContent
+                                        |> sourceOccurrencesOf marksRegex
+                                        |> markOccurrencesRelativeToInto soFarAcrossComments
+                                            { row = comment.row
+                                            , col = comment.col + 2
+                                            }
+                                )
+                                soFarAcrossCommentLines
+                    )
+                    (when module_.syntax.docs is
+                        Nothing -> Array.Builder.empty 0
+                        Just moduleDocs ->
+                            moduleDocs.value
+                                |> sourceOccurrencesOf marksRegex
+                                |> markOccurrencesRelativeToInto (Array.Builder.empty 0)
+                                    { row = moduleDocs.start.row
+                                    , col = moduleDocs.start.col + 3
+                                    }
+                    )
+                |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.values
+                |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.unions
+                |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.aliases
+                |> (\builder ->
+                        when module_.syntax.effects is
+                            Compiler.Ast.Source.NoEffects -> builder
+                            Compiler.Ast.Source.Manager _ -> builder
+                            Compiler.Ast.Source.Ports ports ->
+                                builder |> addMarkOccurrencesFromModuleDeclarations marksRegex ports
+                   )
+                -- TODO also ports
+                |> Array.Builder.toArray
+    in
+    if occurrences |> Array.isEmpty then
+        knowledgeNone
+    
+    else
+        Dict.singleton module_.path occurrences
+
+
+addMarkOccurrencesFromModuleDeclarations :
+    String.Regex.Regex
+    -> Array (Compiler.Ast.Source.ModuleDeclaration declaration)
+    ->
+        Array.Builder.Builder
+            { mark : String
+            , region : SourcePosition.Region
+            }
+    ->
+        Array.Builder.Builder
+            { mark : String
+            , region : SourcePosition.Region
+            }
+addMarkOccurrencesFromModuleDeclarations marksRegex moduleDeclarations builder =
+    moduleDeclarations
+        |> Array.foldl
+            (\moduleDeclaration soFar ->
+                when moduleDeclaration.value.docs is
+                    Nothing ->
+                        soFar
+
+                    Just moduleDeclarationDocs ->
+                        moduleDeclarationDocs.value
+                            |> sourceOccurrencesOf marksRegex
+                            |> markOccurrencesRelativeToInto soFar
+                                { row = moduleDeclarationDocs.start.row
+                                , col = moduleDeclarationDocs.start.col + 3
+                                }
+            )
+            builder
+
+
+markOccurrencesRelativeToInto :
+    Array.Builder.Builder
+        { mark : String
+        , region : SourcePosition.Region
+        }
+    -> SourcePosition.Position
+    -> Maybe (Array { mark : String, region : SourcePosition.Region })
+    ->
+        Array.Builder.Builder
+            { mark : String
+            , region : SourcePosition.Region
+            }
+markOccurrencesRelativeToInto builder afterCommentOpen maybeOccurrencesInComment =
+    when maybeOccurrencesInComment is
+        Nothing ->
+            builder
+        
+        Just occurrencesInComment ->
+            occurrencesInComment
+                |> Array.foldl
+                    (\occurrence soFar ->
+                        soFar
+                            |> Array.Builder.pushLast
+                                { mark = occurrence.mark
+                                , region =
+                                    occurrence.region
+                                        |> regionRelativeTo afterCommentOpen
+                                }
+                    )
+                    builder
+
+
+regionRelativeTo :
+    SourcePosition.Position
+    -> SourcePosition.Region
+    -> SourcePosition.Region
+regionRelativeTo baseStart offsetRegion =
+    { start = offsetRegion.start |> locationRelativeTo baseStart
+    , end = offsetRegion.end |> locationRelativeTo baseStart
+    }
+
+
+locationRelativeTo :
+    SourcePosition.Position
+    -> SourcePosition.Position
+    -> SourcePosition.Position
+locationRelativeTo baseStart offsetLocation =
+    when offsetLocation.row is
+        1 ->
+            { row = baseStart.row
+            , col = baseStart.col + offsetLocation.col
+            }
+
+        offsetRowAtLeast2 ->
+            { row = baseStart.row + (offsetRowAtLeast2 - 1)
+            , col = offsetLocation.col
+            }
+
+
+commentValueContent : Compiler.Parse.Context.CommentValue -> String
+commentValueContent commentValue =
+    when commentValue is
+        Compiler.Parse.Context.Line line -> line
+        Compiler.Parse.Context.Block block -> block
+
+
+report : Knowledge -> Array ExtraCheck.Error
+report knowledge =
+    knowledge
+        |> Dict.foldl
+            (\path occurrences soFarAcrossPaths ->
+                occurrences
+                    |> Array.foldl
+                        (\occurrence soFar ->
+                            soFar
+                                |> Array.Builder.pushLast
+                                    { path = path
+                                    , message = "marked " ++ occurrence.mark
+                                    , region = occurrence.region
+                                    , details =
+                                        "This " ++ occurrence.mark ++ " has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                                    , fix = []
+                                    }
+                        )
+                        soFarAcrossPaths
+            )
+            (Array.Builder.empty 0)
+        |> Array.Builder.toArray
+
+
+sourceOccurrencesOf :
+    String.Regex.Regex
+    -> String
+    -> Maybe (Array { mark : String, region : SourcePosition.Region })
+sourceOccurrencesOf marksRegex source =
+    let
+        matches : Array String.Regex.Match
+        matches =
+            source |> String.Regex.find marksRegex
+    in
+    when matches |> Array.first is
+        Nothing ->
+            Nothing
+        
+        Just firstMatch ->
+            -- this is fairly un-optimal and just feels wrong
+            -- (what do you mean allocate a new object for each unit?).
+            -- Alternatives warmly welcomed, the best chance is probably
+            -- using Array.lines in combination with line-wise contains then find.
+            -- (which still allocates each line + object per line + long array for all lines)
+            source
+                |> String.foldlUnits
+                    (\unit soFar ->
+                        if unit == '\n' then
+                            { unitIndex = soFar.unitIndex + 1
+                            , row = soFar.row + 1
+                            , col = 1
+                            , builder = soFar.builder
+                            , match = soFar.match
+                            , nextMatchIndex = soFar.nextMatchIndex
+                            }
+
+                        else if soFar.match.index - soFar.unitIndex == 0 then
+                            { unitIndex = soFar.unitIndex + 1
+                            , row = soFar.row
+                            , col = soFar.col + 1
+                            , builder =
+                                soFar.builder
+                                    |> Array.Builder.pushLast
+                                        { mark = soFar.match.match
+                                        , region =
+                                            { start =
+                                                { row = soFar.row, col = soFar.col }
+                                            , end =
+                                                { row = soFar.row, col = soFar.col + (soFar.match.match |> String.unitLength) }
+                                            }
+                                        }
+                            , match =
+                                matches
+                                    |> Array.get soFar.nextMatchIndex
+                                    |> Maybe.withDefault soFar.match
+                            , nextMatchIndex = soFar.nextMatchIndex + 1
+                            }
+                                
+                        else
+                            { unitIndex = soFar.unitIndex + 1
+                            , row = soFar.row
+                            , col = soFar.col + 1
+                            , builder = soFar.builder
+                            , match = soFar.match
+                            , nextMatchIndex = soFar.nextMatchIndex
+                            }
+                    )
+                    { unitIndex = 0
+                    , row = 1
+                    , col = 1
+                    , builder = Array.Builder.empty (matches |> Array.length)
+                    , match = firstMatch
+                    , nextMatchIndex = 1
+                    }
+                |> .builder
+                |> Array.Builder.toArray
+                |> Just
+
+
+regexCharNeedsEscaping : Char -> Bool
+regexCharNeedsEscaping char =
+    when char is
+        '.' -> True
+        '^' -> True
+        '$' -> True
+        '*' -> True
+        '+' -> True
+        '?' -> True
+        '(' -> True
+        ')' -> True
+        '[' -> True
+        ']' -> True
+        '{' -> True
+        '}' -> True
+        '\\' -> True
+        '|' -> True
+        _ -> False

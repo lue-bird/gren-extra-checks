@@ -8,6 +8,7 @@
     "exposed-modules": [
         "ExtraCheck",
         "ExtraChecksRunnerNode",
+        "DocumentationDoesNotContainTodo",
         "DebugIsNotUsed"
     ],
     "gren-version": "0.6.3 <= v < 0.7.0",
