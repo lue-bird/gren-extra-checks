@@ -1,4 +1,4 @@
-> TODO: polish up the runner, change details from Array String to String, consider walking indirect dependencies as well. add helper to traverse expression with introduced local bindings. Consider switching to gren-diff/a port of minibill's elm-diff
+> TODO: polish up the runner. Consider switching to gren-diff/a port of minibill's elm-diff
 
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
 It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter, faster internals.
@@ -29,6 +29,7 @@ module StringSpellsCompanyNameCorrectly exposing (check)
 import ExtraCheck
 import SourcePosition
 import Compiler.Ast.Source
+import Compiler.Parse.Context
 import Array.Builder
 
 
@@ -51,7 +52,11 @@ type alias Knowledge =
 
 
 moduleDataToKnowledge :
-    { path : String, syntax : Compiler.Ast.Source.Module, source : String }
+    { path : String
+    , source : String
+    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+    , syntax : Compiler.Ast.Source.Module
+    }
     -> Knowledge
 moduleDataToKnowledge moduleData =
     { typosInStrings =
@@ -172,5 +177,6 @@ To sum up, a checklist
   - the parser implemented in `gren-lang/compiler-common` is not on par with the haskell one.
     It for example fails to parse top-level variable names starting with type, some long lines and negation in parens,
     and is also massively slower
+  - indirect dependencies are not indexed. There are no technical limitations on this AFAIK, so if you have a need for this (e.g. for generating code that needs info from distant dependency types)
   - the problem you encountered. Please [open an issue](https://github.com/lue-bird/gren-extra-checks/issues) <3
 

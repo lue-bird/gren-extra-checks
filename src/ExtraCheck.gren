@@ -189,7 +189,13 @@ type Run
                     Array { syntax : Compiler.Ast.Source.Module, source : String }
                 }
          , addedOrChangedExtraFiles : Array { path : String, source : String }
-         , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+         , addedOrChangedModules :
+            Array
+                { path : String
+                , source : String
+                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , syntax : Compiler.Ast.Source.Module
+                }
          , removedExtraFilePaths : Array String
          , removedModulePaths : Array String
          }
@@ -310,7 +316,11 @@ check out the checks in this package like [`DebugIsNotUsed.check`](DebugIsNotUse
 -}
 create :
     { inspectModule :
-        { syntax : Compiler.Ast.Source.Module, source : String, path : String }
+        { path : String
+        , source : String
+        , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+        , syntax : Compiler.Ast.Source.Module
+        }
         -> knowledge
     , inspectGrenJson :
         { source : String, outline : Compiler.Outline.Outline } -> knowledge
@@ -535,7 +545,13 @@ run :
                 , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
                 }
         , addedOrChangedExtraFiles : Array { path : String, source : String }
-        , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        , addedOrChangedModules :
+            Array
+                { path : String
+                , source : String
+                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , syntax : Compiler.Ast.Source.Module
+                }
         , removedExtraFilePaths : Array String
         , removedModulePaths : Array String
         }
@@ -1508,7 +1524,13 @@ toCheckResult check project =
         moduleParseResults :
             Result
                 (Array.Builder.Builder String)
-                (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+                (Array.Builder.Builder
+                    { path : String
+                    , source : String
+                    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                    , syntax : Compiler.Ast.Source.Module
+                    }
+                )
         moduleParseResults =
             moduleFiles |> parseModules
     in
@@ -1581,12 +1603,21 @@ parseModules :
     ->
         Result
             (Array.Builder.Builder String)
-            (Array.Builder.Builder { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+            (Array.Builder.Builder
+                { path : String
+                , source : String
+                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , syntax : Compiler.Ast.Source.Module
+                }
+            )
 parseModules moduleFiles =
     moduleFiles
         |> Array.foldl
             (\moduleUnparsed soFar ->
-                when moduleUnparsed.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                when
+                    moduleUnparsed.source
+                        |> String.Parser.Advanced.run moduleAndCommentsParser Compiler.Parse.Context.empty
+                is
                     Err _ ->
                         Err
                             (Array.Builder.pushLast
@@ -1600,7 +1631,7 @@ parseModules moduleFiles =
                                 )
                             )
 
-                    Ok syntax ->
+                    Ok { syntax, comments } ->
                         when soFar is
                             Ok parsedSoFar ->
                                 Ok
@@ -1608,6 +1639,7 @@ parseModules moduleFiles =
                                         |> Array.Builder.pushLast
                                             { path = moduleUnparsed.path
                                             , source = moduleUnparsed.source
+                                            , comments = comments
                                             , syntax = syntax
                                             }
                                     )
@@ -1616,6 +1648,13 @@ parseModules moduleFiles =
                                 failedToParseSoFar
             )
             (Ok (Array.Builder.empty 2))
+
+
+moduleAndCommentsParser =
+    String.Parser.Advanced.succeed
+        (\syntax context -> { syntax = syntax, comments = context.comments })
+        |> String.Parser.Advanced.keep Compiler.Parse.Module.parser
+        |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
 
 parseDependencyModules :

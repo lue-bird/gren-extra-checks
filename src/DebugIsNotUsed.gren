@@ -13,6 +13,7 @@ import Set
 import Dict
 import DictLocalExtra
 import Array.Builder
+import Compiler.Parse.Context
 
 
 {-| Report uses of [`Debug` module](https://packages.gren-lang.org/package/gren-lang/core/version/latest/module/Debug) members
@@ -79,7 +80,11 @@ knowledgeNone =
 
 
 moduleDataToKnowledge :
-    { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+    { path : String
+    , source : String
+    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+    , syntax : Compiler.Ast.Source.Module
+    }
     -> Knowledge
 moduleDataToKnowledge moduleData =
     let

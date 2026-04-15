@@ -841,7 +841,7 @@ update config event stateOrExited =
                                 moduleAddedOrChangedPathPosix =
                                     moduleAddedOrChanged.path |> FileSystem.Path.toPosixString
                             in
-                            when moduleAddedOrChangedSource |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                            when moduleAddedOrChangedSource |> String.Parser.Advanced.run moduleAndCommentsParser Compiler.Parse.Context.empty is
                                 Err moduleParseError ->
                                     { model = stateOrExited
                                     , command =
@@ -871,7 +871,8 @@ update config event stateOrExited =
                                             , addedOrChangedModules =
                                                 [ { path = moduleAddedOrChangedPathPosix
                                                   , source = moduleAddedOrChangedSource
-                                                  , syntax = moduleAddedOrChangedParsed
+                                                  , comments = moduleAddedOrChangedParsed.comments
+                                                  , syntax = moduleAddedOrChangedParsed.syntax
                                                   }
                                                 ]
                                             , directDependencies = []
@@ -1305,7 +1306,13 @@ reviewRunList :
         { grenJson : { source : String, outline : Compiler.Outline.Outline }
         , directDependencies : Array { outline : Compiler.Outline.PkgOutline, modules : Array { source : String, syntax : Compiler.Ast.Source.Module } }
         , addedOrChangedExtraFiles : Array { path : String, source : String }
-        , addedOrChangedModules : Array { path : String, source : String, syntax : Compiler.Ast.Source.Module }
+        , addedOrChangedModules :
+            Array
+                { path : String
+                , source : String
+                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , syntax : Compiler.Ast.Source.Module
+                }
         , removedExtraFilePaths : Array String
         , removedModulePaths : Array String
         }
@@ -1503,12 +1510,18 @@ allModuleFilesToWithParsedSyntax :
     ->
         Result
             (Array { path : String, error : String })
-            (Array { path : String, source : String, syntax : Compiler.Ast.Source.Module })
+            (Array
+                { path : String
+                , source : String
+                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , syntax : Compiler.Ast.Source.Module
+                }
+            )
 allModuleFilesToWithParsedSyntax moduleFiles =
     moduleFiles
         |> Array.foldl
             (\moduleFile soFar ->
-                when moduleFile.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
+                when moduleFile.source |> String.Parser.Advanced.run moduleAndCommentsParser Compiler.Parse.Context.empty is
                     Err moduleParseDeadEnds ->
                         let
                             error =
@@ -1529,7 +1542,7 @@ allModuleFilesToWithParsedSyntax moduleFiles =
                                         |> Array.Builder.pushLast error
                                     )
 
-                    Ok syntax ->
+                    Ok { comments, syntax } ->
                         when soFar is
                             Err soFarErrorPaths ->
                                 Err soFarErrorPaths
@@ -1537,12 +1550,23 @@ allModuleFilesToWithParsedSyntax moduleFiles =
                             Ok soFarWithParsedSyntax ->
                                 soFarWithParsedSyntax
                                     |> Array.Builder.pushLast
-                                        { path = moduleFile.path, source = moduleFile.source, syntax = syntax }
+                                        { path = moduleFile.path
+                                        , source = moduleFile.source
+                                        , comments = comments
+                                        , syntax = syntax
+                                        }
                                     |> Ok
             )
             (Array.Builder.empty 2 |> Ok)
             |> Result.mapError Array.Builder.toArray
             |> Result.map Array.Builder.toArray
+
+
+moduleAndCommentsParser =
+    String.Parser.Advanced.succeed
+        (\syntax context -> { syntax = syntax, comments = context.comments })
+        |> String.Parser.Advanced.keep Compiler.Parse.Module.parser
+        |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
 
 type alias FileReviewError =

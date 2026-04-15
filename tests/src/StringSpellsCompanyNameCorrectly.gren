@@ -3,6 +3,7 @@ module StringSpellsCompanyNameCorrectly exposing (check)
 import SourcePosition
 import ExtraCheck
 import Compiler.Ast.Source
+import Compiler.Parse.Context
 import Array.Builder
 
 
@@ -25,7 +26,11 @@ type alias Knowledge =
 
 
 moduleDataToKnowledge :
-    { path : String, syntax : Compiler.Ast.Source.Module, source : String }
+    { path : String
+    , source : String
+    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+    , syntax : Compiler.Ast.Source.Module
+    }
     -> Knowledge
 moduleDataToKnowledge moduleData =
     { typosInStrings =
