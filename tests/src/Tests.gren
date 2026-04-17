@@ -431,7 +431,7 @@ tests =
                 )
             ]
         , Test.describe "IntroducedNameIsUsed"
-            [ Test.test "pattern variable"
+            [ Test.test "pattern variable from module declaration parameter"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
@@ -465,7 +465,7 @@ tests =
                               }
                             ]
                 )
-            , Test.test "pattern variable is used"
+            , Test.test "pattern variable from module declaration parameter is used"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
@@ -475,6 +475,25 @@ tests =
                                 module A exposing (main)
                                 main { inner = usedParameter } =
                                     { inner = usedParameter }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "pattern variable from when is unqualified variant case pattern is used"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main =
+                                    when maybe is
+                                        Just line -> line.string
+                                        Nothing -> ""
                                 """
                           }
                         ]

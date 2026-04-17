@@ -120,6 +120,7 @@ type alias Knowledge =
                 { name : String
                 , region : SourcePosition.Region
                 , origin : ExtraCheck.LocalVariableOrigin
+                , scope : SourcePosition.Region
                 }
             )
     }
@@ -573,7 +574,13 @@ inspectModule module_ =
             (module_.syntax.values
                 |> Array.foldl
                     (\moduleVariable soFar ->
-                        ExtraCheck.patternArrayVariablesFold unusedLocalVariablesAdd
+                        ExtraCheck.patternArrayVariablesFold
+                            (\name origin patternVariablesSoFar ->
+                                patternVariablesSoFar
+                                    |> unusedLocalVariablesAdd name
+                                        origin
+                                        (moduleVariable.value.value.body |> expressionRegion)
+                            )
                             soFar
                             moduleVariable.value.value.args
                             |> unusedVariablesAddFromWithinExpression
@@ -1104,12 +1111,12 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
             else
                 initialState
                     |> reduceWithReference { qualification = "", name = variable }
-                        (expression |> ExtraCheck.locatedRegion)
+                        (expression |> expressionRegion)
         
         Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
             initialState
                 |> reduceWithReference { qualification = qualification, name = name }
-                    (expression |> ExtraCheck.locatedRegion)
+                    (expression |> expressionRegion)
         
         _ ->
             expression
@@ -1134,6 +1141,7 @@ unusedVariablesAddFromWithinExpression :
             { name : String
             , region : SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
+            , scope : SourcePosition.Region
             }
     ->
         Dict.Dict
@@ -1142,6 +1150,7 @@ unusedVariablesAddFromWithinExpression :
             { name : String
             , region : SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
+            , scope : SourcePosition.Region
             }
 unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariables =
     when parentExpression.value is
@@ -1152,7 +1161,13 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
         Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
             when
                 initialUnusedLocalVariables
-                    |> Dict.findFirst (\_ localVariable -> localVariable.name == variable)
+                    |> Dict.findFirst
+                        (\_ localVariable ->
+                            (localVariable.name == variable)
+                                && (localVariable.scope
+                                        |> regionIncludes parentExpression.start
+                                   )
+                        )
             is
                 Nothing ->
                     initialUnusedLocalVariables
@@ -1171,7 +1186,12 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
         Compiler.Ast.Source.Negate inNegation ->
             initialUnusedLocalVariables |> unusedVariablesAddFromWithinExpression inNegation
         Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
-            ExtraCheck.patternArrayVariablesFold unusedLocalVariablesAdd initialUnusedLocalVariables parameters
+            ExtraCheck.patternArrayVariablesFold
+                (\name origin soFar ->
+                    soFar |> unusedLocalVariablesAdd name origin (result |> expressionRegion)
+                )
+                initialUnusedLocalVariables
+                parameters
                 |> unusedVariablesAddFromWithinExpression result
         Compiler.Ast.Source.Access { accessor = _, expression = record } ->
             initialUnusedLocalVariables |> unusedVariablesAddFromWithinExpression record
@@ -1221,7 +1241,15 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                             (\def soFar ->
                                 when def.value is
                                     Compiler.Ast.Source.Destruct destruct ->
-                                        ExtraCheck.patternVariablesFold unusedLocalVariablesAdd soFar destruct.pattern
+                                        ExtraCheck.patternVariablesFold
+                                            (\name origin patternVariablesSoFar ->
+                                                patternVariablesSoFar
+                                                    |> unusedLocalVariablesAdd name
+                                                        origin
+                                                        (parentExpression |> expressionRegion)
+                                            )
+                                            soFar
+                                            destruct.pattern
 
                                     Compiler.Ast.Source.Define define ->
                                         soFar
@@ -1229,11 +1257,12 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                                 (ExtraCheck.OriginLetDefineVariable
                                                     { variableDefine =
                                                         { start = def.start, end = def.end, value = define }
-                                                    , outerLetRegion = parentExpression |> ExtraCheck.locatedRegion
+                                                    , outerLetRegion = parentExpression |> expressionRegion
                                                     , outerLetAllDefs = letIn.defs
                                                     , outerLetBody = letIn.body
                                                     }
                                                 )
+                                                (parentExpression |> expressionRegion)
                             )
                             initialUnusedLocalVariables
             in
@@ -1246,7 +1275,13 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                     |> unusedVariablesAddFromWithinExpression
                                         destruct.body
                             Compiler.Ast.Source.Define define ->
-                                ExtraCheck.patternArrayVariablesFold unusedLocalVariablesAdd
+                                ExtraCheck.patternArrayVariablesFold
+                                    (\name origin patternVariablesSoFar ->
+                                        patternVariablesSoFar
+                                            |> unusedLocalVariablesAdd name
+                                                origin
+                                                (define.body |> expressionRegion)
+                                    )
                                     soFar
                                     define.args
                                     |> unusedVariablesAddFromWithinExpression define.body
@@ -1257,7 +1292,15 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
             whenIs.branches
                 |> Array.foldl
                     (\case soFar ->
-                        ExtraCheck.patternVariablesFold unusedLocalVariablesAdd soFar case.pattern
+                        ExtraCheck.patternVariablesFold
+                            (\name origin patternVariablesSoFar ->
+                                patternVariablesSoFar
+                                    |> unusedLocalVariablesAdd name
+                                        origin
+                                        (case.body |> expressionRegion)
+                            )
+                            soFar
+                            case.pattern
                             |> unusedVariablesAddFromWithinExpression case.body
                     )
                     (initialUnusedLocalVariables
@@ -1268,6 +1311,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
 unusedLocalVariablesAdd :
     String
     -> ExtraCheck.LocalVariableOrigin
+    -> SourcePosition.Region
     ->
         Dict.Dict
             -- region
@@ -1275,6 +1319,7 @@ unusedLocalVariablesAdd :
             { name : String
             , region : SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
+            , scope : SourcePosition.Region
             }
     ->
         Dict.Dict
@@ -1283,8 +1328,9 @@ unusedLocalVariablesAdd :
             { name : String
             , region : SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
+            , scope : SourcePosition.Region
             }
-unusedLocalVariablesAdd name origin soFar =
+unusedLocalVariablesAdd name origin scope soFar =
     let
         region : SourcePosition.Region
         region =
@@ -1298,7 +1344,7 @@ unusedLocalVariablesAdd name origin soFar =
     in
     soFar
         |> Dict.set (region |> regionToString)
-            { name = name, region = region, origin = origin }
+            { name = name, region = region, origin = origin, scope = scope }
 
 
 typeReferencesInto :
@@ -1349,6 +1395,54 @@ expressionTypeReferencesInto into typeReferenceToOriginQualifiedString expressio
                 _ ->
                     into
             )
+
+
+regionIncludes : SourcePosition.Position -> SourcePosition.Region -> Bool
+regionIncludes positionToCheck region =
+    (when sourcePositionCompare region.start positionToCheck is
+        LT -> True
+        EQ -> True
+        GT -> False
+    )
+        && (when sourcePositionCompare region.end positionToCheck is
+                LT -> False
+                EQ -> True
+                GT -> True
+           )
+
+
+{-| Hacky workaround for https://github.com/gren-lang/compiler-common/issues/5
+
+Replace with ExtraCheck.locatedRegion once fixed.
+-}
+expressionRegion : Compiler.Ast.Source.Expression -> SourcePosition.Region
+expressionRegion expression =
+    { start = expression |> expressionStart, end = expression.end }
+
+
+expressionStart : Compiler.Ast.Source.Expression -> SourcePosition.Position
+expressionStart expression =
+    when expression.value is
+        Compiler.Ast.Source.Access recordAccess ->
+            expressionStart recordAccess.expression
+        
+        Compiler.Ast.Source.Binops operation ->
+            expressionStart operation.left
+        
+        Compiler.Ast.Source.Call call ->
+            expressionStart call.fn
+        
+        _ ->
+            expression.start
+
+
+sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare a b =
+    when Basics.compare a.row b.row is
+        LT -> LT
+        GT -> GT
+        EQ ->
+            Basics.compare a.col b.col
 
 
 regionToString : SourcePosition.Region -> String
