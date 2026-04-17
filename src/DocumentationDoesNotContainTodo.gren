@@ -146,7 +146,7 @@ inspectModule marksRegex module_ =
         occurrences =
             module_.comments
                 |> Dict.foldl
-                    (\line commentsInLine soFarAcrossCommentLines ->
+                    (\_ commentsInLine soFarAcrossCommentLines ->
                         commentsInLine
                             |> Array.foldl
                                 (\comment soFarAcrossComments ->

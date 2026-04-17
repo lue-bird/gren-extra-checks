@@ -1,4 +1,4 @@
-module DictLocalExtra exposing (toArrayMap, flatToArrayMap, firstJustMap, fromArrayMap, unionWith)
+module DictLocalExtra exposing (toArrayMap, firstJustMap, fromArrayMap, unionWith)
 
 import Dict exposing (Dict)
 import Array.Builder
@@ -31,19 +31,6 @@ fromArrayMap elementToEntry list =
                 soFar |> Dict.set newEntry.key newEntry.value
             )
             Dict.empty
-
-
-flatToArrayMap :
-    (key -> value -> Array element)
-    -> Dict key value
-    -> Array element
-flatToArrayMap keyValueToElement dict =
-    dict
-        |> Dict.foldr
-            (\key value soFar ->
-                keyValueToElement key value ++ soFar
-            )
-            []
 
 
 unionWith :

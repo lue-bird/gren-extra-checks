@@ -109,10 +109,10 @@ moduleDataToKnowledge moduleData =
                                                                 Compiler.Ast.Source.ExposedLower valueOrFunctionName ->
                                                                     Just valueOrFunctionName.value
 
-                                                                Compiler.Ast.Source.ExposedUpper exposeName ->
+                                                                Compiler.Ast.Source.ExposedUpper _ ->
                                                                     Nothing
 
-                                                                Compiler.Ast.Source.ExposedOperator symbol ->
+                                                                Compiler.Ast.Source.ExposedOperator _ ->
                                                                     Nothing
                                                         )
 
