@@ -4,10 +4,10 @@ module ExtraCheck exposing
     , Error, grenJsonPath
     , SourceEdit, insertAt, removeRegion, replaceRegion
     , determineModuleOrigin, importsToExplicit
-    , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
-    , patternVariablesIntoDict, patternArrayVariablesIntoDict
+    , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin(..), patternImmediateSubsFold, typeImmediateSubsFold
+    , patternVariablesFold, patternArrayVariablesFold
     , moduleExposes, exposedArrayToExposes
-    , locatedRegion, sourceExtractInRegion, sourceRegionsOf
+    , locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
     , outlineExposedModuleNameSet
     , expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
@@ -63,11 +63,11 @@ E.g. to find all `as` pattern regions
 (In practice you should use an Array.Builder instead of Array here.)
 This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
 
-@docs expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, patternImmediateSubsFold, typeImmediateSubsFold
-@docs patternVariablesIntoDict, patternArrayVariablesIntoDict
+@docs expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin, patternImmediateSubsFold, typeImmediateSubsFold
+@docs patternVariablesFold, patternArrayVariablesFold
 @docs determineModuleOrigin, importsToExplicit
 @docs moduleExposes, exposedArrayToExposes
-@docs locatedRegion, sourceExtractInRegion, sourceRegionsOf
+@docs locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
 @docs outlineExposedModuleNameSet
 
 Suggestions to add, remove or change helpers welcome!
@@ -611,37 +611,50 @@ sourceExtractInRegion region string =
         |> String.lines
         |> Array.dropFirst (region.start.row - 1)
         |> Array.takeFirst (region.end.row - region.start.row + 1)
-        |> arrayLastMap (\line -> line |> String.takeFirst (region.end.col - 1))
+        |> arrayLastMap
+            (\line -> line |> String.sliceUnits 0 (region.end.col - 1))
         |> String.join "\n"
-        |> String.dropFirst (region.start.col - 1)
+        |> (\end ->
+                end
+                    |> String.sliceUnits (region.start.col - 1)
+                        (end |> String.unitLength)
+           )
 
 
 {-| Find all occurrences of a given section in the source in the when you
-can't access or easily calculate the [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region)
+can't access or easily calculate the [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region).
+Use sparingly
 -}
 sourceRegionsOf : String -> String -> Array SourcePosition.Region
 sourceRegionsOf sectionToFind source =
     let
         sectionToFindLength : Int
         sectionToFindLength =
-            sectionToFind |> String.count
+            sectionToFind |> String.unitLength
     in
     source
         |> String.indices sectionToFind
         |> Array.map
             (\startOffset ->
-                { start = startOffset |> sourceOffsetToLocationIn source
-                , end = (startOffset + sectionToFindLength) |> sourceOffsetToLocationIn source
+                { start = startOffset |> sourceUnitIndexToPosition source
+                , end =
+                    (startOffset + sectionToFindLength)
+                        |> sourceUnitIndexToPosition source
                 }
             )
 
 
-sourceOffsetToLocationIn : String -> Int -> SourcePosition.Position
-sourceOffsetToLocationIn source sourceOffset =
+{-| Convert an offset into the source (measured in units)
+into a [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region).
+Use sparingly
+-}
+sourceUnitIndexToPosition : String -> Int -> SourcePosition.Position
+sourceUnitIndexToPosition source sourceOffset =
+    -- can be optimized
     let
         lines : Array String
         lines =
-            source |> String.takeFirst sourceOffset |> String.lines
+            source |> String.sliceUnits 0 sourceOffset |> String.lines
     in
     { row = lines |> Array.length
     , col =
@@ -1168,11 +1181,11 @@ sourceApplyEdits fixes sourceCode =
 
 sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
 sourcePositionCompare a b =
-    when Basics.compare a.col b.col is
+    when Basics.compare a.row b.row is
         LT -> LT
         GT -> GT
         EQ ->
-            Basics.compare a.row b.row
+            Basics.compare a.col b.col
 
 
 applyFixSingle : SourceEdit -> (Array String -> Array String)
@@ -1237,7 +1250,6 @@ regionsCollide a b =
 
                 GT ->
                     True
-
 
 
 -- test
@@ -2241,7 +2253,7 @@ locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
             ++ (under |> formatSourceCode)
             ++ "\n\nI found "
             ++ (occurrencesInSourceCode |> Array.length |> String.fromInt)
-            ++ " locations where that code appeared. Switch from ExtraCheck.ExpectUnder to ExtraCheck.ExpectUnderExactly to make the region you were targeting unambiguous.\n\nTip: I found them starting at:\n"
+            ++ " locations where that code appeared. Switch from ExtraCheck.ExpectUnder to ExtraCheck.ExpectUnderExactly to make the region you were targeting unambiguous.\nI found this code starting at:\n"
             ++ (occurrencesInSourceCode
                     |> Array.map
                         (\occurrence ->
@@ -2262,7 +2274,7 @@ startingLocationInSource sourceCode position =
         linesBeforeAndIncludingPosition : Array String
         linesBeforeAndIncludingPosition =
             sourceCode
-                |> String.slice 0 position
+                |> String.sliceUnits 0 position
                 |> String.lines
     in
     { row = linesBeforeAndIncludingPosition |> Array.length
@@ -2521,7 +2533,7 @@ missingSourceEditsForFile path expectedError =
     failureMessage "file fix edits are missing"
         ("The error with the message\n\n  "
             ++ expectedError.message
-            ++ "\n\ndid not provide edits as a fix for the file at the path "
+            ++ "\n\ndid not provide edits as a fix for the file at path "
             ++ path
             ++ " which I had expected."
         )
@@ -2801,27 +2813,46 @@ expressionImmediateSubsFold reduce initialState parentExpression =
                     )
 
 
+{-| Place where a local variable is introduced
+-}
+type LocalVariableOrigin
+    = OriginLetDefineVariable
+        { variableDefine : SourcePosition.Located Compiler.Ast.Source.DefineRecord
+        , outerLetRegion : SourcePosition.Region
+        , outerLetAllDefs : Array (SourcePosition.Located Compiler.Ast.Source.Def)
+        , outerLetBody : Compiler.Ast.Source.Expression
+        }
+    | OriginPatternPunnedField SourcePosition.Region
+    | OriginPatternVariable SourcePosition.Region
+
+
 {-| Walk immediate child-expressions,
 tracking what new bindings have been added to the name scope for each sub-expression,
 collecting information on the way.
 
 Don't forget to include function declaration parameter variables in the given dict
-using [`patternArrayVariablesIntoDict`](#patternArrayVariablesIntoDict).
+using [`patternArrayVariablesFold`](#patternArrayVariablesFold).
 
 Knowing local variable names in all parts of an expression
 is useful for knowing if a variable refers to an import-exposed (or implicitly imported) name
 or is unrelated.
 When you want to fix code by inserting references like `identity`,
 first check for local variables and if necessary insert `Basics/WhateverImportAliasIsUsed.identity` instead.
+
+Note that in these cases, you also need to check for module-declared variable names first.
 -}
 expressionImmediateSubsFoldWithIntroducedVariables :
-    Dict String SourcePosition.Region
-    -> (Compiler.Ast.Source.Expression -> Dict String SourcePosition.Region -> state -> state)
+    Dict String LocalVariableOrigin
+    -> (Compiler.Ast.Source.Expression
+        -> Dict String LocalVariableOrigin
+        -> state
+        -> state
+       )
     -> state
-    -> Compiler.Ast.Source.Expression_
+    -> Compiler.Ast.Source.Expression
     -> state
 expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce initialState parentExpression =
-    when parentExpression is
+    when parentExpression.value is
         Compiler.Ast.Source.NumberLiteral _ -> initialState
         Compiler.Ast.Source.CharLiteral _ -> initialState
         Compiler.Ast.Source.StringLiteral _ -> initialState
@@ -2840,7 +2871,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
         Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
             initialState
                 |> reduce result
-                    (patternArrayVariablesIntoDict initialLocalVariables parameters)
+                    (patternArrayVariablesFold Dict.set initialLocalVariables parameters)
         Compiler.Ast.Source.Access { accessor = _, expression = record } ->
             initialState |> reduce record initialLocalVariables
         Compiler.Ast.Source.ArrayLiteral elements ->
@@ -2883,19 +2914,26 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     )
         Compiler.Ast.Source.Let letIn ->
             let
-                localVariablesIncludingAcrossDefines : Dict String SourcePosition.Region
+                localVariablesIncludingAcrossDefines : Dict String LocalVariableOrigin
                 localVariablesIncludingAcrossDefines =
                     letIn.defs
                         |> Array.foldl
                             (\def soFar ->
                                 when def.value is
                                     Compiler.Ast.Source.Destruct destruct ->
-                                        patternVariablesIntoDict soFar destruct.pattern
+                                        patternVariablesFold Dict.set soFar destruct.pattern
 
                                     Compiler.Ast.Source.Define define ->
                                         soFar
                                             |> Dict.set define.name.value 
-                                                (define.name |> locatedRegion)
+                                                (OriginLetDefineVariable
+                                                    { variableDefine =
+                                                        { start = def.start, end = def.end, value = define }
+                                                    , outerLetRegion = parentExpression |> locatedRegion
+                                                    , outerLetAllDefs = letIn.defs
+                                                    , outerLetBody = letIn.body
+                                                    }
+                                                )
                             )
                             initialLocalVariables
             in
@@ -2912,7 +2950,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                                 soFar
                                     |> reduce
                                         define.body
-                                        (patternArrayVariablesIntoDict
+                                        (patternArrayVariablesFold Dict.set
                                             localVariablesIncludingAcrossDefines
                                             define.args
                                         )
@@ -2925,66 +2963,72 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     (\case soFar ->
                         soFar
                             |> reduce case.body
-                                (patternVariablesIntoDict initialLocalVariables case.pattern)
+                                (patternVariablesFold Dict.set initialLocalVariables case.pattern)
                     )
                     (initialState
                         |> reduce whenIs.expression initialLocalVariables
                     )
 
 
-{-| Fill the given dict with all the bindings contained (deep) within
-the given patterns
+{-| Fold over all the bindings contained (deep) within
+the given patterns.
+Typically used with `patternArrayVariablesFold Dict.set Dict.empty declarationParameters`
 -}
-patternArrayVariablesIntoDict :
-    Dict String SourcePosition.Region
+patternArrayVariablesFold :
+    (String -> LocalVariableOrigin -> state -> state)
+    -> state
     -> Array Compiler.Ast.Source.Pattern
-    -> Dict String SourcePosition.Region
-patternArrayVariablesIntoDict initialDict patterns =
+    -> state
+patternArrayVariablesFold reduce initialState patterns =
     patterns
         |> Array.foldl
-            (\pattern soFar -> patternVariablesIntoDict soFar pattern)
-            initialDict
+            (\pattern soFar -> patternVariablesFold reduce soFar pattern)
+            initialState
 
 
-{-| Fill the given dict with all the bindings contained (deep) within
-the given pattern
+{-| Fold over all the bindings contained (deep) within
+the given pattern.
+Typically used with `patternVariablesFold Dict.set currentLocalVariables pattern`
 -}
-patternVariablesIntoDict :
-    Dict String SourcePosition.Region
+patternVariablesFold :
+    (String -> LocalVariableOrigin -> state -> state)
+    -> state
     -> Compiler.Ast.Source.Pattern
-    -> Dict String SourcePosition.Region
-patternVariablesIntoDict initialDict pattern =
+    -> state
+patternVariablesFold reduce initialState pattern =
     -- I haven't actually measured whether it is faster to construct and reduce union
     -- small Dicts or to construct a big one. I assume it should be the big one though
     -- because less objects are created and (I think) more comparisons are happening
     when pattern.value is
-        Compiler.Ast.Source.PInt _ -> initialDict
-        Compiler.Ast.Source.PChr _ -> initialDict
-        Compiler.Ast.Source.PStr _ -> initialDict
-        Compiler.Ast.Source.PAnything _ -> initialDict
+        Compiler.Ast.Source.PInt _ -> initialState
+        Compiler.Ast.Source.PChr _ -> initialState
+        Compiler.Ast.Source.PStr _ -> initialState
+        Compiler.Ast.Source.PAnything _ -> initialState
         Compiler.Ast.Source.PVar variableName ->
-            initialDict |> Dict.set variableName (pattern |> locatedRegion)
+            initialState
+                |> reduce variableName 
+                    (OriginPatternVariable (pattern |> locatedRegion))
         Compiler.Ast.Source.PAlias alias ->
-            patternVariablesIntoDict initialDict alias.pattern
+            patternVariablesFold reduce initialState alias.pattern
         Compiler.Ast.Source.PCtor variant ->
             when variant.arg is
                 Nothing ->
-                    initialDict
+                    initialState
 
                 Just value ->
-                    patternVariablesIntoDict initialDict value
+                    patternVariablesFold reduce initialState value
         Compiler.Ast.Source.PCtorQual variant ->
             when variant.arg is
                 Nothing ->
-                    initialDict
+                    initialState
 
                 Just value ->
-                    patternVariablesIntoDict initialDict value
+                    patternVariablesFold reduce initialState value
         Compiler.Ast.Source.PArray elements ->
             elements
                 |> Array.foldl
-                    (\element soFar -> patternVariablesIntoDict soFar element)
-                    initialDict
+                    (\element soFar -> patternVariablesFold reduce soFar element)
+                    initialState
         Compiler.Ast.Source.PRecord fields ->
             fields
                 |> Array.foldl
@@ -2992,11 +3036,13 @@ patternVariablesIntoDict initialDict pattern =
                         when field.pattern is
                             Nothing ->
                                 soFar
+                                    |> reduce field.field.value
+                                        (OriginPatternPunnedField (field.field |> locatedRegion))
 
                             Just fieldValue ->
-                                patternVariablesIntoDict soFar fieldValue
+                                patternVariablesFold reduce soFar fieldValue
                     )
-                    initialDict
+                    initialState
 
 
 setFromArray : Array comparableElement -> Set comparableElement
