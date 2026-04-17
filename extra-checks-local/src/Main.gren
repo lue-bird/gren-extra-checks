@@ -9,6 +9,7 @@ import DocumentationDoesNotContainTodo
 import StringSpellsCompanyNameCorrectly
 import IntroducedNameIsUsed
 import ExtraChecksRunnerNode
+import ExtraCheck
 
 
 main =
@@ -18,6 +19,8 @@ main =
             [ IntroducedNameIsUsed.check
             , DebugIsNotUsed.check
             , DocumentationDoesNotContainTodo.check [ "TODO" ]
+                |> ExtraCheck.ignoreErrorsForPathsWhere
+                    (\path -> path |> String.contains "DocumentationDoesNotContainTodo")
             , StringSpellsCompanyNameCorrectly.check
             ]
         }

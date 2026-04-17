@@ -1328,7 +1328,19 @@ reviewRunList checks project =
                 , nextRun : ExtraCheck.Run
                 }
         runResultsForReviews =
-            checks |> Array.map (\review -> project |> ExtraCheck.run review)
+            checks
+                |> Array.map
+                    (\review ->
+                        ExtraCheck.run review.run
+                            { ignoreErrorsForPathsWhere = review.ignoreErrorsForPathsWhere
+                            , grenJson = project.grenJson
+                            , directDependencies = project.directDependencies
+                            , addedOrChangedExtraFiles = project.addedOrChangedExtraFiles
+                            , addedOrChangedModules = project.addedOrChangedModules
+                            , removedExtraFilePaths = project.removedExtraFilePaths
+                            , removedModulePaths = project.removedModulePaths
+                            }
+                    )
     in
     { errorsByPath =
         runResultsForReviews

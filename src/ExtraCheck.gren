@@ -181,7 +181,8 @@ Though I'm always excited to try and experiment with other options (except the c
 -}
 type Run
     = Run
-        ({ grenJson : { source : String, outline : Compiler.Outline.Outline }
+        ({ ignoreErrorsForPathsWhere : String.String -> Basics.Bool
+         , grenJson : { source : String, outline : Compiler.Outline.Outline }
          , directDependencies :
             Array
                 { outline : Compiler.Outline.PkgOutline
@@ -395,20 +396,24 @@ create check =
                         check.report combinedKnowledge
                             |> Array.foldl
                                 (\error soFar ->
-                                    soFar
-                                        |> Dict.update
-                                            error.path
-                                            (\errorsForPathSoFar ->
-                                                errorsForPathSoFar
-                                                    |> Maybe.withDefault (Array.Builder.empty 1)
-                                                    |> Array.Builder.pushLast
-                                                        { message = error.message
-                                                        , details = error.details
-                                                        , region = error.region
-                                                        , fixEditsByPath = error.fix |> fixToFileEditsByPath
-                                                        }
-                                                    |> Just
-                                            )
+                                    if project.ignoreErrorsForPathsWhere error.path then
+                                        soFar
+                                    
+                                    else
+                                        soFar
+                                            |> Dict.update
+                                                error.path
+                                                (\errorsForPathSoFar ->
+                                                    errorsForPathSoFar
+                                                        |> Maybe.withDefault (Array.Builder.empty 1)
+                                                        |> Array.Builder.pushLast
+                                                            { message = error.message
+                                                            , details = error.details
+                                                            , region = error.region
+                                                            , fixEditsByPath = error.fix |> fixToFileEditsByPath
+                                                            }
+                                                        |> Just
+                                                )
                                 )
                                 Dict.empty
                                 |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
@@ -508,7 +513,8 @@ as a dict along with a next [`Run`](#Run) that uses cached knowledge wherever it
     doCheck =
         let
             project =
-                { addedOrChangedModules =
+                { ignoreErrorsForPathsWhere = SomeConvention.check.ignoreErrorsForPathsWhere
+                , addedOrChangedModules =
                     [ { path = "src/A.gren", source = "module A exposing (a)\na = 1", syntax = ... }
                     , { path = "src/B.gren", source = "module B exposing (b)\nb = 1", syntax = ... }
                     ]
@@ -516,7 +522,7 @@ as a dict along with a next [`Run`](#Run) that uses cached knowledge wherever it
                 }
 
             runResult =
-                ExtraCheck.run SomeConvention.check project
+                ExtraCheck.run SomeConvention.check.run project
         in
         doSomethingWith runResult.errorsByPath
 
@@ -524,9 +530,8 @@ The resulting next [`Run`](#Run) internally keeps a cache to make it faster to r
 You can store this resulting `nextRun` in your application state type, e.g.
 
     ExtraCheck.run
-        { run = yourApplicationState.nextRunProvidedByTheLastCheckRun
-        , ignoreErrorsForPathsWhere = SomeConvention.check.ignoreErrorsForPathsWhere
-        }
+        yourApplicationState.nextRunProvidedByTheLastCheckRun
+        SomeConvention.check.ignoreErrorsForPathsWhere
         { addedOrChangedModules =
             [ { path = "src/C.gren", source = "module C exposing (c)\nc = 1", syntax = ... }
             ]
@@ -536,9 +541,10 @@ You can store this resulting `nextRun` in your application state type, e.g.
 
 -}
 run :
-    Check
+    Run
     ->
-        { grenJson : { source : String, outline : Compiler.Outline.Outline }
+        { ignoreErrorsForPathsWhere : String.String -> Basics.Bool
+        , grenJson : { source : String, outline : Compiler.Outline.Outline }
         , directDependencies :
             Array
                 { outline : Compiler.Outline.PkgOutline
@@ -568,10 +574,10 @@ run :
                 )
         , nextRun : Run
         }
-run check project =
+run run_ project =
     let
         (Run runWithCapturedCache) =
-            check.run
+            run_
     in
     runWithCapturedCache project
 
@@ -1557,14 +1563,15 @@ toCheckResult check project =
 
                 runErrorsByPath : Dict String (Array FileCheckError)
                 runErrorsByPath =
-                    { grenJson = project.grenJson
+                    { ignoreErrorsForPathsWhere = check.ignoreErrorsForPathsWhere
+                    , grenJson = project.grenJson
                     , directDependencies = project.directDependencies
                     , addedOrChangedExtraFiles = extraFiles
                     , addedOrChangedModules = modulesParsed
                     , removedExtraFilePaths = []
                     , removedModulePaths = []
                     }
-                        |> run check
+                        |> run check.run
                         |> .errorsByPath
 
                 fileErrors : Array SuccessfulRunResult
