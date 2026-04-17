@@ -180,7 +180,6 @@ inspectModule marksRegex module_ =
                             Compiler.Ast.Source.Ports ports ->
                                 builder |> addMarkOccurrencesFromModuleDeclarations marksRegex ports
                    )
-                -- TODO also ports
                 |> Array.Builder.toArray
     in
     if occurrences |> Array.isEmpty then
