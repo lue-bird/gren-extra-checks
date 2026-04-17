@@ -129,16 +129,14 @@ moduleDataToKnowledge moduleData =
                         { fullQualification = "Debug", exposes = [] }
                     )
 
-        moduleDeclaredVariableNames : Dict.Dict String SourcePosition.Region
+        moduleDeclaredVariableNames : Set.Set String
         moduleDeclaredVariableNames =
             moduleData.syntax.values
                 |> Array.foldl
                     (\valueOrFunctionDeclaration soFar ->
-                        soFar
-                            |> Dict.set valueOrFunctionDeclaration.value.value.name.value
-                                (valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion)
+                        soFar |> Set.set valueOrFunctionDeclaration.value.value.name.value
                     )
-                    Dict.empty
+                    Set.empty
 
         debugUses =
             moduleData.syntax.values
@@ -146,9 +144,9 @@ moduleDataToKnowledge moduleData =
                     (\variableDeclaration soFarAcrossDeclarations ->
                         variableDeclaration.value.value.body
                             |> expressionUsedReferencesFoldExcludingLocalVariables
+                                moduleDeclaredVariableNames
                                 (variableDeclaration.value.value.args
-                                    |> ExtraCheck.patternArrayVariablesIntoDict
-                                        moduleDeclaredVariableNames
+                                    |> ExtraCheck.patternArrayVariablesFold Dict.set Dict.empty
                                 )
                                 (\reference referenceRegion soFar ->
                                     if reference |> referenceIsImportedFrom debugImport then
@@ -292,15 +290,16 @@ report knowledge =
 
 
 expressionUsedReferencesFoldExcludingLocalVariables :
-    Dict.Dict String SourcePosition.Region
+    Set.Set String
+    -> Dict.Dict String ExtraCheck.LocalVariableOrigin
     -> ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
     -> state
     -> Compiler.Ast.Source.Expression
     -> state
-expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithReference initialState expression =
+expressionUsedReferencesFoldExcludingLocalVariables moduleDeclaredVariableNames localVariables reduceWithReference initialState expression =
     when expression.value is
         Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
-            if localVariables |> Dict.member variable then
+            if (moduleDeclaredVariableNames |> Set.member variable) || (localVariables |> Dict.member variable) then
                 initialState
 
             else
@@ -313,13 +312,14 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                 |> reduceWithReference { qualification = qualification, name = name }
                     (expression |> ExtraCheck.locatedRegion)
         
-        expressionNotVariable ->
-            expressionNotVariable
+        _ ->
+            expression
                 |> ExtraCheck.expressionImmediateSubsFoldWithIntroducedVariables
                     localVariables
                     (\sub localVariablesForSub soFar ->
                         sub
                             |> expressionUsedReferencesFoldExcludingLocalVariables
+                                moduleDeclaredVariableNames
                                 localVariablesForSub
                                 reduceWithReference
                                 soFar
