@@ -8,6 +8,7 @@ import Test
 import Expect
 import Test.Runner
 import Random
+import IntroducedNameIsUsed
 
 
 tests : Test.Test
@@ -425,6 +426,476 @@ tests =
                                     "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
                               , region = ExtraCheck.ExpectUnder "TODO"
                               , fixedFiles = []
+                              }
+                            ]
+                )
+            ]
+        , Test.describe "IntroducedNameIsUsed"
+            [ Test.test "pattern variable"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main { inner = unusedParameter } =
+                                    { inner = "" }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "pattern variable unusedParameter is never referenced"
+                              , details =
+                                    "Use this variable or prepend an underscore to explicitly ignore it."
+                              , region = ExtraCheck.ExpectUnder "unusedParameter"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main { inner = _unusedParameter } =
+                                                { inner = "" }
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "pattern variable is used"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main { inner = usedParameter } =
+                                    { inner = usedParameter }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "punned field pattern"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main { unusedParameter } =
+                                    { inner = "" }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "punned pattern field unusedParameter is never referenced"
+                              , details =
+                                    "Use this variable or append = _ to explicitly ignore it."
+                              , region = ExtraCheck.ExpectUnder "unusedParameter"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main { unusedParameter = _ } =
+                                                { inner = "" }
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "let-defined variable"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main =
+                                    let
+                                        inner = unusedParameter
+                                    in
+                                    { result = "" }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "let-defined variable inner is never referenced"
+                              , details =
+                                    "Use this variable or remove the let define. Alternatively, if you want to keep a value around for debugging, assign it to _ to explicitly ignore it."
+                              , region = ExtraCheck.ExpectUnder "inner"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main =
+                                                { result = "" }
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "module-defined variable"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = ""
+                                unusedVariable = ""
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.unusedVariable is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "unusedVariable"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main = ""
+
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "module-defined variable is used"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = usedVariable
+                                usedVariable = ""
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used only in other module via explicit import expose"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (usedVariable)
+                                usedVariable = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A exposing (usedVariable)
+                                main = usedVariable
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used only in other module via explicit import, fully qualified"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (usedVariable)
+                                usedVariable = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A
+                                main = A.usedVariable
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used only in other module via explicit import, qualified with alias"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (usedVariable)
+                                usedVariable = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A as Alias
+                                main = Alias.usedVariable
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used only in other module via explicit import exposing (..)"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (usedVariable)
+                                usedVariable = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A exposing (..)
+                                main = usedVariable
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable not used even though it is explicitly imported exposing (..)"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (something, unusedVariable)
+                                unusedVariable = ""
+                                something = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A exposing (..)
+                                main = something
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.unusedVariable is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region =
+                                    ExtraCheck.ExpectUnderExactly
+                                        { section = "unusedVariable", startingAt = { row = 2, col = 1 } }
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (something)
+
+                                            something = ""
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "unused variable fix removes explicit import expose, only one expose"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (something, unusedVariable)
+                                unusedVariable = ""
+                                something = ""
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (main)
+                                import A exposing (unusedVariable)
+                                main = A.something
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.unusedVariable is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region =
+                                    ExtraCheck.ExpectUnderExactly
+                                        { section = "unusedVariable", startingAt = { row = 2, col = 1 } }
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (something)
+                                            
+                                            something = ""
+                                            """
+                                      }
+                                    , { path = "src/B.gren"
+                                      , source =
+                                            """
+                                            module B exposing (main)
+                                            import A
+                                            main = A.something
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "port"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                port module A exposing (main)
+                                main = ""
+                                port send : Cmd event
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.send is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "send"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main = ""
+
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "port is used"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                port module A exposing (main)
+                                main = send
+                                port send : Cmd event
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined type alias is used"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main : Used
+                                main = ""
+                                type alias Used = String
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined type alias"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = ""
+                                type alias Unused = String
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "type A.Unused is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "Unused"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main = ""
+
+                                            """
+                                      }
+                                    ]
                               }
                             ]
                 )

@@ -7,6 +7,7 @@ using itself as a dependency
 import DebugIsNotUsed
 import DocumentationDoesNotContainTodo
 import StringSpellsCompanyNameCorrectly
+import IntroducedNameIsUsed
 import ExtraChecksRunnerNode
 
 
@@ -14,7 +15,8 @@ main =
     ExtraChecksRunnerNode.program
         { extraPaths = [ "README.md" ]
         , checks =
-            [ DebugIsNotUsed.check
+            [ IntroducedNameIsUsed.check
+            , DebugIsNotUsed.check
             , DocumentationDoesNotContainTodo.check [ "TODO" ]
             , StringSpellsCompanyNameCorrectly.check
             ]
