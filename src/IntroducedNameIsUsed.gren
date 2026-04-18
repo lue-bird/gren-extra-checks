@@ -138,9 +138,11 @@ knowledgeMerge a b =
     , moduleInfos =
         a.moduleInfos |> Dict.union b.moduleInfos
     , usedTypeNames =
-        a.usedTypeNames |> Dict.union b.usedTypeNames
+        a.usedTypeNames
+            |> DictLocalExtra.unionWith Set.union b.usedTypeNames
     , usedVariableNames =
-        a.usedVariableNames |> Dict.union b.usedVariableNames
+        a.usedVariableNames
+            |> DictLocalExtra.unionWith Set.union b.usedVariableNames
     , modulesImportingExposingAll =
         a.modulesImportingExposingAll
             |> Dict.union b.modulesImportingExposingAll
@@ -529,11 +531,11 @@ inspectModule module_ =
                         Dict.empty
             }
     , usedTypeNames =
-        -- it's okay to not remove the unqualified names as they are never queried
         usedTypesIncludingUnqualifiedFromExposingAll
+            |> Dict.remove ""
     , usedVariableNames =
-        -- it's okay to not remove the unqualified names as they are never queried
         usedVariablesIncludingUnqualifiedFromExposingAll
+            |> Dict.remove ""
     , modulesImportingExposingAll =
         if imports.exposingAll |> Set.isEmpty then
             Dict.empty
@@ -1084,27 +1086,6 @@ exposingRemoveTypeEdit typeToRemove exposes =
                 (RemoveExposingRegion
                     { start = exposeRemoveStart, end = exposeRemoveEnd }
                 )
-
-
-referenceToString : { qualification : String, name : String } -> String
-referenceToString reference =
-    if reference.qualification |> String.isEmpty then
-        reference.name
-    
-    else
-        reference.qualification ++ "." ++ reference.name
-
-
-stringToReference : String -> { qualification : String, name : String }
-stringToReference referenceString =
-    when referenceString |> String.lastIndexOf "." is
-        Nothing ->
-            { qualification = "", name = referenceString }
-
-        Just lastDotIndex ->
-            { qualification = referenceString |> String.takeFirst lastDotIndex
-            , name = referenceString |> String.dropFirst (lastDotIndex + 1)
-            }
 
 
 expressionUsedReferencesFoldExcludingLocalVariables :
