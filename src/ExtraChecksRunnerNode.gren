@@ -5,15 +5,7 @@ module ExtraChecksRunnerNode exposing
 
 {-|
 
-@docs program, Program, initWith, update, subscriptions
-
-If you experience a high memory footprint in a large project,
-please open an issue called "only ask for file sources to generate local error displays".
-
-That's all you need to know.
-Below are the internal types if you're interested:
-
-@docs ProgramEvent, ProgramState
+@docs program, Program, initWith, update, subscriptions, ProgramEvent, ProgramState
 
 -}
 
@@ -171,6 +163,11 @@ program config =
         }
 
 
+projectToAnalyzePath : FileSystem.Path.Path
+projectToAnalyzePath =
+    FileSystem.Path.fromPosixString ".."
+
+
 readGrenPackage :
     FileSystem.Permission
     -> Compiler.Paths.CacheRoot
@@ -180,7 +177,7 @@ readGrenPackage fileSystemPermission cacheRoot { name, version } =
     Compiler.Package.loadFromPath fileSystemPermission
         (when version is
             Compiler.Outline.LocalPath localPath ->
-                FileSystem.Path.fromPosixString ".."
+                projectToAnalyzePath
                     |> FileSystem.Path.append localPath
 
             Compiler.Outline.Version semanticVersion ->
@@ -294,13 +291,19 @@ initialInfoTask :
                 }
             )
 initialInfoTask { extraPaths, fileSystemPermission, platform } =
-    FileSystem.readFile fileSystemPermission
-        (FileSystem.Path.fromPosixString "../gren.json")
+    let
+        grenJsonPath : FileSystem.Path.Path
+        grenJsonPath =
+            projectToAnalyzePath
+                |> FileSystem.Path.appendPosixString "gren.json"
+    in
+    FileSystem.readFile fileSystemPermission grenJsonPath
         |> Task.mapError
             (\fileSystemError ->
                 "file system error: "
                     ++ (fileSystemError |> FileSystem.errorToString)
-                    ++ ", reading ../gren.json"
+                    ++ ", reading "
+                    ++ (grenJsonPath |> FileSystem.Path.toPosixString)
             )
         |> Task.andThen
             (\bytes ->
@@ -312,10 +315,17 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
 
                             Err jsonError ->
                                 Task.fail
-                                    ("invalid json, reading ../gren.json: " ++ (jsonError |> Json.Decode.errorToString))
+                                    ("invalid json, reading "
+                                        ++ (grenJsonPath |> FileSystem.Path.toPosixString)
+                                        ++ ": "
+                                        ++ (jsonError |> Json.Decode.errorToString)
+                                    )
 
                     Nothing ->
-                        Task.fail "invalid string, reading ../gren.json"
+                        Task.fail
+                            ("invalid string, reading "
+                                ++ (grenJsonPath |> FileSystem.Path.toPosixString)
+                            )
             )
         |> Task.andThen
             (\grenJson ->
@@ -329,8 +339,9 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                                             module_.path
                                                 |> FileSystem.Path.toPosixString
                                                 -- hacky solution to get the path
-                                                -- relative to the ..
-                                                |> String.dropFirst (String.unitLength "../")
+                                                -- relative to the projectToAnalyzePath
+                                                |> String.dropFirst
+                                                    ((projectToAnalyzePath |> FileSystem.Path.toPosixString |> String.count) + 1)
                                         , source = module_.source
                                         }
                                     ) 
@@ -367,21 +378,23 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                     |> Task.andMap
                         (Compiler.Outline.findSourceFiles fileSystemPermission
                             grenJson.outline
-                            (FileSystem.Path.fromPosixString "..")
+                            projectToAnalyzePath
                             |> Task.mapError
                                 (\error ->
                                     when error is
                                         Compiler.Outline.FileSystemError fileSystemError ->
                                             "file system error: "
                                                 ++ (fileSystemError |> FileSystem.errorToString)
-                                                ++ ", reading gren source files in .."
+                                                ++ ", reading gren source files in "
+                                                ++ (projectToAnalyzePath |> FileSystem.Path.toPosixString)
                                         Compiler.Outline.FilePathInvalidModuleName { path, inferredModuleName } ->
                                             "invalid file module name, reading gren source file "
                                                 ++ (path |> FileSystem.Path.toPosixString)
                                                 ++ ". Inferred module name would be "
                                                 ++ inferredModuleName
                                         Compiler.Outline.FileContentNotValidString _ ->
-                                            "invalid string, reading gren source files in .."
+                                            "invalid string, reading gren source files in "
+                                                ++ (projectToAnalyzePath |> FileSystem.Path.toPosixString)
                                 )
                         )
                     |> Task.andMap
@@ -389,9 +402,8 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                             |> Array.map 
                                 (\extraPath ->
                                     readFileString fileSystemPermission
-                                        (FileSystem.Path.fromPosixString ".."
-                                            |> FileSystem.Path.append
-                                                (FileSystem.Path.fromPosixString extraPath)
+                                        (projectToAnalyzePath
+                                            |> FileSystem.Path.appendPosixString extraPath
                                         )
                                         |> Task.map (\source -> { path = extraPath, source = source })
                                 )
@@ -585,8 +597,9 @@ subscriptions config stateOrExited =
                 |> Array.map
                     (\sourceDirectory ->
                         let
+                            relativeSourceDirectoryPath : FileSystem.Path.Path
                             relativeSourceDirectoryPath =
-                                (FileSystem.Path.fromPosixString ".."
+                                (projectToAnalyzePath
                                     |> FileSystem.Path.append sourceDirectory
                                 )
                         in
@@ -601,8 +614,9 @@ subscriptions config stateOrExited =
                 |> Array.map
                     (\extraPath ->
                         let
+                            relativeExtraPath : FileSystem.Path.Path
                             relativeExtraPath =
-                                FileSystem.Path.fromPosixString ".."
+                                projectToAnalyzePath
                                     |> FileSystem.Path.appendPosixString extraPath
                         in
                         FileSystem.watchRecursive state.fileSystemPermission
@@ -721,7 +735,7 @@ update config event stateOrExited =
                                                         (\fix ->
                                                             FileSystem.writeFile state.fileSystemPermission
                                                                 (fix.fixedSource |> Bytes.fromString)
-                                                                (FileSystem.Path.fromPosixString ".."
+                                                                (projectToAnalyzePath
                                                                     |> FileSystem.Path.appendPosixString fix.path
                                                                 )
                                                         )
@@ -816,7 +830,7 @@ update config event stateOrExited =
                                         sourceDirectory |> FileSystem.Path.append subPath
                                 in
                                 readFileString state.fileSystemPermission
-                                    (FileSystem.Path.fromPosixString ".."
+                                    (projectToAnalyzePath
                                         |> FileSystem.Path.append removedOrAddedModulePath
                                     )
                                     |> Task.attempt
@@ -836,7 +850,7 @@ update config event stateOrExited =
                                         sourceDirectory |> FileSystem.Path.append subPath
                                 in
                                 readFileString state.fileSystemPermission
-                                    (FileSystem.Path.fromPosixString ".."
+                                    (projectToAnalyzePath
                                         |> FileSystem.Path.append changedModulePath
                                     )
                                     |> Task.attempt
@@ -1034,7 +1048,7 @@ update config event stateOrExited =
                                         FileSystem.Path.fromPosixString extraPath |> filePathAppendSubPathIfNotEqual subPath
                                 in
                                 readFileString state.fileSystemPermission
-                                    (FileSystem.Path.fromPosixString ".."
+                                    (projectToAnalyzePath
                                         |> FileSystem.Path.append removedOrAddedExtraPath
                                     )
                                     |> Task.attempt
@@ -1054,7 +1068,7 @@ update config event stateOrExited =
                                         FileSystem.Path.fromPosixString extraPath |> filePathAppendSubPathIfNotEqual subPath
                                 in
                                 readFileString state.fileSystemPermission
-                                    (FileSystem.Path.fromPosixString ".."
+                                    (projectToAnalyzePath
                                         |> FileSystem.Path.append changedExtraPath
                                     )
                                     |> Task.attempt
@@ -1215,6 +1229,7 @@ filePathAppendSubPathIfNotEqual subPath basePath =
         basePath |> FileSystem.Path.append subPath
 
 
+noErrorsWaitingForChangesString : String
 noErrorsWaitingForChangesString =
     Ansi.clear
         ++ "No further errors currently, watching for changes... To stop, press ctrl+c"
