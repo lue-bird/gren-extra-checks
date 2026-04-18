@@ -1,4 +1,4 @@
-module DictLocalExtra exposing (toArrayMap, firstJustMap, fromArrayMap, unionWith)
+module DictLocalExtra exposing (toArrayMap, fromArrayMap, unionWith)
 
 import Dict exposing (Dict)
 import Array.Builder
@@ -56,22 +56,3 @@ unionWith valueABMerge bDict aDict =
         aDict
         bDict
 
-
-firstJustMap : (key -> value -> Maybe found) -> Dict key value -> Maybe found
-firstJustMap keyValueToMaybeFound fastDict =
-    fastDict
-        |> Dict.foldl
-            (\key value maybeFoundSoFar ->
-                when maybeFoundSoFar is
-                    (Just _) as justFoundSoFar ->
-                        justFoundSoFar
-
-                    Nothing ->
-                        when keyValueToMaybeFound key value is
-                            Nothing ->
-                                Nothing
-
-                            Just found ->
-                                Just found
-            )
-            Nothing

@@ -331,6 +331,8 @@ inspectModule module_ =
         
         variableReferenceToModuleOrigin : { qualification : String, name : String } -> String
         variableReferenceToModuleOrigin reference =
+            -- this does not take implicit imports into account.
+            -- should still be fine since these will never be queried
             if reference.qualification |> String.isEmpty then
                 if moduleVariableInfos |> Dict.member reference.name then
                     module_.syntax.name.value
@@ -356,6 +358,8 @@ inspectModule module_ =
         
         typeReferenceToModuleOrigin : { qualification : String, name : String } -> String
         typeReferenceToModuleOrigin reference =
+            -- this does not take implicit imports into account.
+            -- should still be fine since these will never be queried
             if reference.qualification |> String.isEmpty then
                 if moduleTypeInfos |> Dict.member reference.name then
                     module_.syntax.name.value
