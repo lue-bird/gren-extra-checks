@@ -18,7 +18,7 @@ import Compiler.Outline
 
 
 {-| Forbid unused type names, module-defined variables, let-defined variables, pattern variables including punned fields
-and import exposes (TODO: choice types, modules).
+and import exposes (TODO: choice types, dependencies).
 
 Unused imports, import aliases, import exposes and module exposes are **allowed**;
 reporting these would be more annoying than helpful.
@@ -64,11 +64,12 @@ they are allowed to overlap
 -}
 type alias Knowledge =
     { exposedModules : Set.Set String
-    , moduleHeaders :
+    , moduleInfos :
         Dict.Dict
-            -- module path
+            -- module name
             String
-            { exposing_ : Compiler.Ast.Source.Exposing
+            { path : String
+            , exposing_ : Compiler.Ast.Source.Exposing
             , importsWithExplicitExposes :
                 Dict.Dict String
                     { region : SourcePosition.Region
@@ -76,32 +77,39 @@ type alias Knowledge =
                     , exposes : Array Compiler.Ast.Source.Exposed
                     }
             , declarationCount : Int
-            }
-    , typeNameOrigins :
-        Dict.Dict
-            -- fully qualified reference
-            String
-            { modulePath : String
-            , nameRegion : SourcePosition.Region
-            , declarationRegion : SourcePosition.Region
+            , types :
+                Dict.Dict
+                    String
+                    { nameRegion : SourcePosition.Region
+                    , declarationRegion : SourcePosition.Region
+                    }
+            , variables :
+                Dict.Dict
+                    String
+                    { nameRegion : SourcePosition.Region
+                    , declarationRegion : SourcePosition.Region
+                    , portModuleKeywordStartIfPort : Maybe SourcePosition.Position
+                    }
+            , unusedLocalVariables :
+                Dict.Dict
+                    -- region
+                    String
+                    { name : String
+                    , region : SourcePosition.Region
+                    , origin : ExtraCheck.LocalVariableOrigin
+                    , scope : SourcePosition.Region
+                    }
             }
     , usedTypeNames :
-        Set.Set
-            -- fully qualified reference
-            String
-    , variableNameOrigins :
         Dict.Dict
-            -- fully qualified reference
+            -- module origin
             String
-            { modulePath : String
-            , nameRegion : SourcePosition.Region
-            , declarationRegion : SourcePosition.Region
-            , portModuleKeywordStartIfPort : Maybe SourcePosition.Position
-            }
+            (Set.Set String)
     , usedVariableNames :
-        Set.Set
-            -- fully qualified reference
+        Dict.Dict
+            -- module origin
             String
+            (Set.Set String)
     , modulesImportingExposingAll :
         Dict.Dict
             -- module path
@@ -110,55 +118,32 @@ type alias Knowledge =
             , variableNameUses : Set.Set String
             , typeNameUses : Set.Set String
             }
-    , unusedLocalVariables :
-        Dict.Dict
-            -- module path
-            String
-            (Dict.Dict
-                -- region
-                String
-                { name : String
-                , region : SourcePosition.Region
-                , origin : ExtraCheck.LocalVariableOrigin
-                , scope : SourcePosition.Region
-                }
-            )
     }
 
 
 knowledgeNone : Knowledge
 knowledgeNone =
-    { moduleHeaders = Dict.empty
-    , exposedModules = Set.empty
-    , typeNameOrigins = Dict.empty
-    , usedTypeNames = Set.empty
-    , variableNameOrigins = Dict.empty
-    , usedVariableNames = Set.empty
+    { exposedModules = Set.empty
+    , moduleInfos = Dict.empty
+    , usedTypeNames = Dict.empty
+    , usedVariableNames = Dict.empty
     , modulesImportingExposingAll = Dict.empty
-    , unusedLocalVariables = Dict.empty
     }
 
 
 knowledgeMerge : Knowledge -> Knowledge -> Knowledge
 knowledgeMerge a b =
-    { moduleHeaders =
-        a.moduleHeaders |> Dict.union b.moduleHeaders
-    , exposedModules =
+    { exposedModules =
         a.exposedModules |> Set.union b.exposedModules
-    , typeNameOrigins =
-        a.typeNameOrigins |> Dict.union b.typeNameOrigins
+    , moduleInfos =
+        a.moduleInfos |> Dict.union b.moduleInfos
     , usedTypeNames =
-        a.usedTypeNames |> Set.union b.usedTypeNames
-    , variableNameOrigins =
-        a.variableNameOrigins |> Dict.union b.variableNameOrigins
+        a.usedTypeNames |> Dict.union b.usedTypeNames
     , usedVariableNames =
-        a.usedVariableNames |> Set.union b.usedVariableNames
+        a.usedVariableNames |> Dict.union b.usedVariableNames
     , modulesImportingExposingAll =
         a.modulesImportingExposingAll
             |> Dict.union b.modulesImportingExposingAll
-    , unusedLocalVariables =
-        a.unusedLocalVariables
-            |> Dict.union b.unusedLocalVariables
     }
 
 
@@ -314,57 +299,57 @@ inspectModule module_ =
                             Set.empty
                     )-}
         
-        variableReferenceToOriginQualifiedString : { qualification : String, name : String } -> String
-        variableReferenceToOriginQualifiedString reference =
+        variableReferenceToModuleOrigin : { qualification : String, name : String } -> String
+        variableReferenceToModuleOrigin reference =
             if reference.qualification |> String.isEmpty then
                 if moduleVariableNames |> Set.member reference.name then
-                    module_.syntax.name.value ++ "." ++ reference.name
+                    module_.syntax.name.value
                 
                 else
                     when imports.exposedVariableNames |> Dict.get reference.name is
                         Just originModuleName ->
-                            originModuleName ++ "." ++ reference.name
+                            originModuleName
 
                         Nothing ->
                             -- is from exposing (..)
-                            reference.name
+                            ""
 
             else
                 -- has qualification
                 when imports.byAlias |> Dict.get reference.qualification is
                     Just originModuleName ->
-                        originModuleName ++ "." ++ reference.name
+                        originModuleName
                     
                     Nothing ->
                         -- qualification = module name
-                        reference |> referenceToString
+                        reference.qualification
         
-        typeReferenceToOriginQualifiedString : { qualification : String, name : String } -> String
-        typeReferenceToOriginQualifiedString reference =
+        typeReferenceToModuleOrigin : { qualification : String, name : String } -> String
+        typeReferenceToModuleOrigin reference =
             if reference.qualification |> String.isEmpty then
                 if moduleTypeNames |> Set.member reference.name then
-                    module_.syntax.name.value ++ "." ++ reference.name
+                    module_.syntax.name.value
                 
                 else
                     when imports.exposedTypeNames |> Dict.get reference.name is
                         Just originModuleName ->
-                            originModuleName ++ "." ++ reference.name
+                            originModuleName
 
                         Nothing ->
                             -- is from exposing (..)
-                            reference.name
+                            ""
 
             else
                 -- has qualification
                 when imports.byAlias |> Dict.get reference.qualification is
                     Just originModuleName ->
-                        originModuleName ++ "." ++ reference.name
+                        originModuleName
                     
                     Nothing ->
                         -- qualification = module name
-                        reference |> referenceToString
+                        reference.qualification
         
-        usedVariablesIncludingUnqualifiedFromExposingAll : Set.Set String
+        usedVariablesIncludingUnqualifiedFromExposingAll : Dict.Dict String (Set.Set String)
         usedVariablesIncludingUnqualifiedFromExposingAll =
             module_.syntax.values
                 |> Array.foldl
@@ -375,21 +360,21 @@ inspectModule module_ =
                                     |> ExtraCheck.patternArrayVariablesFold Dict.set Dict.empty
                                 )
                                 (\reference _ soFar ->
-                                    soFar |> Set.set (reference |> variableReferenceToOriginQualifiedString)
+                                    soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
                                 )
                                 soFarAcrossModuleVariables
                     )
-                    Set.empty
+                    Dict.empty
 
-        usedTypesIncludingUnqualifiedFromExposingAll : Set.Set String
+        usedTypesIncludingUnqualifiedFromExposingAll : Dict.Dict String (Set.Set String)
         usedTypesIncludingUnqualifiedFromExposingAll =
             module_.syntax.aliases
                 |> Array.foldl
                     (\moduleVariable soFar ->
                         moduleVariable.value.value.type_.value
-                            |> typeReferencesInto soFar typeReferenceToOriginQualifiedString
+                            |> typeReferencesInto soFar typeReferenceToModuleOrigin
                     )
-                    Set.empty
+                    Dict.empty
                 |> (\typeNames ->
                         module_.syntax.unions
                             |> Array.foldl
@@ -402,7 +387,7 @@ inspectModule module_ =
                                                     Just variantValue ->
                                                         variantValue.value
                                                             |> typeReferencesInto soFarAcrossVariants
-                                                                typeReferenceToOriginQualifiedString
+                                                                typeReferenceToModuleOrigin
                                             )
                                             soFarAcrossUnions
                                 )
@@ -422,7 +407,7 @@ inspectModule module_ =
                                         (\port_ soFarAcrossPorts ->
                                             port_.value.value.signature.value
                                                 |> typeReferencesInto soFarAcrossPorts
-                                                    typeReferenceToOriginQualifiedString
+                                                    typeReferenceToModuleOrigin
                                         )
                                         typeNames
                    )
@@ -438,16 +423,18 @@ inspectModule module_ =
                                                 Just signature ->
                                                     signature.value
                                                         |> typeReferencesInto soFarAcrossModuleVariables
-                                                            typeReferenceToOriginQualifiedString
+                                                            typeReferenceToModuleOrigin
                                             )
-                                            typeReferenceToOriginQualifiedString
+                                            typeReferenceToModuleOrigin
                                 )
                                 typeNames
                    )
     in
-    { moduleHeaders =
-        Dict.singleton module_.path
-            { exposing_ = module_.syntax.exports
+    { exposedModules = Set.empty
+    , moduleInfos =
+        Dict.singleton module_.syntax.name.value
+            { path = module_.path
+            , exposing_ = module_.syntax.exports
             , importsWithExplicitExposes = imports.withExplicitExposes
             , declarationCount =
                 (module_.syntax.values |> Array.length)
@@ -459,90 +446,88 @@ inspectModule module_ =
                             Compiler.Ast.Source.Manager _ -> 0
                             Compiler.Ast.Source.Ports ports -> ports |> Array.length
                       )
-            }
-    , exposedModules = Set.empty
-    , typeNameOrigins =
-        module_.syntax.aliases
-            |> Array.foldl
-                (\typeAlias soFar ->
-                    soFar
-                        |> Dict.set
-                            (module_.syntax.name.value
-                                ++ "."
-                                ++ typeAlias.value.value.name.value
-                            )
-                            { modulePath = module_.path
-                            , nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
-                            , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
-                            }
-                )
-                (module_.syntax.unions
+            , types =
+                module_.syntax.aliases
                     |> Array.foldl
-                        (\choiceType soFar ->
+                        (\typeAlias soFar ->
                             soFar
-                                |> Dict.set
-                                    (module_.syntax.name.value
-                                        ++ "."
-                                        ++ choiceType.value.value.name.value
-                                    )
-                                    { modulePath = module_.path
-                                    , nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
-                                    , declarationRegion = choiceType |> ExtraCheck.locatedRegion
+                                |> Dict.set typeAlias.value.value.name.value
+                                    { nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
+                                    , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
                                     }
                         )
-                        Dict.empty
-                )
-    , variableNameOrigins =
-        module_.syntax.values
-            |> Array.foldl
-                (\valueOrFunctionDeclaration soFar ->
-                    soFar
-                        |> Dict.set
-                            (module_.syntax.name.value
-                                ++ "."
-                                ++ valueOrFunctionDeclaration.value.value.name.value
-                            )
-                            { modulePath = module_.path
-                            , nameRegion =
-                                valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion
-                            , declarationRegion =
-                                valueOrFunctionDeclaration |> ExtraCheck.locatedRegion
-                            , portModuleKeywordStartIfPort = Nothing
-                            }
-                )
-                (when module_.syntax.effects is
-                    Compiler.Ast.Source.NoEffects ->
-                        Dict.empty
-                    
-                    Compiler.Ast.Source.Manager _ ->
-                        Dict.empty
-                    
-                    Compiler.Ast.Source.Ports ports ->
-                        let
-                            modulePortKeywordStart =
-                                -- hack. better would be extracting this position from the AST itself
-                                module_.source
-                                    |> String.firstIndexOf "port module"
-                                    |> Maybe.map
-                                        (\index -> index |> ExtraCheck.sourceUnitIndexToPosition module_.source)
-                        in
-                        ports
+                        (module_.syntax.unions
                             |> Array.foldl
-                                (\port_ soFar ->
+                                (\choiceType soFar ->
                                     soFar
-                                        |> Dict.set
-                                            (module_.syntax.name.value
-                                                ++ "."
-                                                ++ port_.value.value.name.value
-                                            )
-                                            { modulePath = module_.path
-                                            , nameRegion = port_.value.value.name |> ExtraCheck.locatedRegion
-                                            , declarationRegion = port_ |> ExtraCheck.locatedRegion
-                                            , portModuleKeywordStartIfPort = modulePortKeywordStart
+                                        |> Dict.set module_.syntax.name.value
+                                            { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
+                                            , declarationRegion = choiceType |> ExtraCheck.locatedRegion
                                             }
                                 )
                                 Dict.empty
-                )
+                        )
+            , variables =
+                module_.syntax.values
+                    |> Array.foldl
+                        (\valueOrFunctionDeclaration soFar ->
+                            soFar
+                                |> Dict.set
+                                    valueOrFunctionDeclaration.value.value.name.value
+                                    { nameRegion =
+                                        valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion
+                                    , declarationRegion =
+                                        valueOrFunctionDeclaration |> ExtraCheck.locatedRegion
+                                    , portModuleKeywordStartIfPort = Nothing
+                                    }
+                        )
+                        (when module_.syntax.effects is
+                            Compiler.Ast.Source.NoEffects ->
+                                Dict.empty
+                            
+                            Compiler.Ast.Source.Manager _ ->
+                                Dict.empty
+                            
+                            Compiler.Ast.Source.Ports ports ->
+                                let
+                                    modulePortKeywordStart =
+                                        -- hack. better would be extracting this position from the AST itself
+                                        module_.source
+                                            |> String.firstIndexOf "port module"
+                                            |> Maybe.map
+                                                (\index -> index |> ExtraCheck.sourceUnitIndexToPosition module_.source)
+                                in
+                                ports
+                                    |> Array.foldl
+                                        (\port_ soFar ->
+                                            soFar
+                                                |> Dict.set
+                                                    port_.value.value.name.value
+                                                    { nameRegion = port_.value.value.name |> ExtraCheck.locatedRegion
+                                                    , declarationRegion = port_ |> ExtraCheck.locatedRegion
+                                                    , portModuleKeywordStartIfPort = modulePortKeywordStart
+                                                    }
+                                        )
+                                        Dict.empty
+                        )
+            , unusedLocalVariables =
+                module_.syntax.values
+                    |> Array.foldl
+                        (\moduleVariable soFar ->
+                            ExtraCheck.patternArrayVariablesFold
+                                (\name origin patternVariablesSoFar ->
+                                    patternVariablesSoFar
+                                        |> unusedLocalVariablesAdd name
+                                            origin
+                                            (moduleVariable.value.value.body |> expressionRegion)
+                                )
+                                soFar
+                                moduleVariable.value.value.args
+                                |> unusedVariablesAddFromWithinExpression
+                                    moduleVariable.value.value.body
+                        )
+                        Dict.empty
+            }
     , usedTypeNames =
         -- it's okay to not remove the unqualified names as they are never queried
         usedTypesIncludingUnqualifiedFromExposingAll
@@ -558,36 +543,13 @@ inspectModule module_ =
                 { importedModulesExposingAll = imports.exposingAll
                 , typeNameUses =
                     usedTypesIncludingUnqualifiedFromExposingAll
-                        |> Set.keepIf
-                            (\usedTypeName ->
-                                Basics.not (String.contains "." usedTypeName)
-                            )
+                        |> Dict.get ""
+                        |> Maybe.withDefault Set.empty
                 , variableNameUses =
                     usedVariablesIncludingUnqualifiedFromExposingAll
-                        |> Set.keepIf
-                            (\usedVariableName ->
-                                Basics.not (String.contains "." usedVariableName)
-                            )
+                        |> Dict.get ""
+                        |> Maybe.withDefault Set.empty
                 }
-    , unusedLocalVariables =
-        Dict.singleton module_.path
-            (module_.syntax.values
-                |> Array.foldl
-                    (\moduleVariable soFar ->
-                        ExtraCheck.patternArrayVariablesFold
-                            (\name origin patternVariablesSoFar ->
-                                patternVariablesSoFar
-                                    |> unusedLocalVariablesAdd name
-                                        origin
-                                        (moduleVariable.value.value.body |> expressionRegion)
-                            )
-                            soFar
-                            moduleVariable.value.value.args
-                            |> unusedVariablesAddFromWithinExpression
-                                moduleVariable.value.value.body
-                    )
-                    Dict.empty
-            )
     }
 
 
@@ -595,92 +557,87 @@ inspectModule module_ =
 report : Knowledge -> Array ExtraCheck.Error
 report knowledge =
     let
-        typeNameIsUsed : String -> Bool
-        typeNameIsUsed typeName =
-            (knowledge.usedTypeNames |> Set.member typeName)
-                || (let
-                        { qualification, name } =
-                            typeName |> stringToReference
-                    in
-                    (knowledge.exposedModules |> Set.member qualification)
-                        || (knowledge.modulesImportingExposingAll
-                                |> Dict.any
-                                    (\_ moduleImportingExposingAll ->
-                                        (moduleImportingExposingAll.importedModulesExposingAll
-                                            |> Set.member qualification
+        typeNameIsUsed : { moduleOrigin : String, name : String } -> Bool
+        typeNameIsUsed { moduleOrigin, name } =
+            (knowledge.usedTypeNames
+                |> Dict.get moduleOrigin
+                |> Maybe.checkValue (\usedNames -> usedNames |> Set.member name)
+            )
+                || (knowledge.exposedModules |> Set.member moduleOrigin)
+                || (knowledge.modulesImportingExposingAll
+                        |> Dict.any
+                            (\_ moduleImportingExposingAll ->
+                                (moduleImportingExposingAll.importedModulesExposingAll
+                                    |> Set.member moduleOrigin
+                                )
+                                    && (moduleImportingExposingAll.typeNameUses
+                                            |> Set.member name
                                         )
-                                            && (moduleImportingExposingAll.typeNameUses
-                                                    |> Set.member name
-                                               )
-                                    )
-                           )
+                            )
                    )
 
-        variableNameIsUsed : String -> Bool
-        variableNameIsUsed variableName =
-            (knowledge.usedVariableNames |> Set.member variableName)
-                || (let
-                        { qualification, name } =
-                            variableName |> stringToReference
-                    in
-                    name == "main"
-                        || (knowledge.exposedModules |> Set.member qualification)
-                        || (knowledge.modulesImportingExposingAll
-                                |> Dict.any
-                                    (\_ moduleImportingExposingAll ->
-                                        (moduleImportingExposingAll.importedModulesExposingAll
-                                            |> Set.member qualification
+        variableNameIsUsed : { moduleOrigin : String, name : String } -> Bool
+        variableNameIsUsed { moduleOrigin, name } =
+            (knowledge.usedVariableNames
+                |> Dict.get moduleOrigin
+                |> Maybe.checkValue (\usedNames -> usedNames |> Set.member name)
+            )
+                || (name == "main")
+                || (knowledge.exposedModules |> Set.member moduleOrigin)
+                || (knowledge.modulesImportingExposingAll
+                        |> Dict.any
+                            (\_ moduleImportingExposingAll ->
+                                (moduleImportingExposingAll.importedModulesExposingAll
+                                    |> Set.member moduleOrigin
+                                )
+                                    && (moduleImportingExposingAll.variableNameUses
+                                            |> Set.member name
                                         )
-                                            && (moduleImportingExposingAll.variableNameUses
-                                                    |> Set.member name
-                                               )
-                                    )
-                           )
+                            )
                    )
-
     in
-    knowledge.unusedLocalVariables
-        |> Dict.foldl
-            (\modulePath moduleUnusedLocalVariables soFarAcrossModules ->
-                moduleUnusedLocalVariables
-                    |> Dict.foldl
+    Array.Builder.empty 0
+        |> asInitForDictFoldlOver knowledge.moduleInfos
+            (\originModuleName moduleInfo soFarAcrossModules ->
+                soFarAcrossModules
+                    |> asInitForDictFoldlOver moduleInfo.unusedLocalVariables
                         (\_ localVariable soFar ->
                             soFar
                                 |> Array.Builder.pushLast
                                     (when localVariable.origin is
                                         ExtraCheck.OriginPatternVariable patternVariableRegion ->
-                                            { path = modulePath
+                                            { path = moduleInfo.path
                                             , message = "pattern variable " ++ localVariable.name ++ " is never referenced"
                                             , region = patternVariableRegion
                                             , details =
                                                 "Use this variable or prepend an underscore to explicitly ignore it."
                                             , fix =
-                                                [ { path = modulePath
-                                                  , edits = [ ExtraCheck.insertAt patternVariableRegion.start "_" ]
-                                                  }
+                                                [ { path = moduleInfo.path
+                                                    , edits = [ ExtraCheck.insertAt patternVariableRegion.start "_" ]
+                                                    }
                                                 ]
                                             }
                                         ExtraCheck.OriginPatternPunnedField punnedFieldRegion ->
-                                            { path = modulePath
+                                            { path = moduleInfo.path
                                             , message = "punned pattern field " ++ localVariable.name ++ " is never referenced"
                                             , region = punnedFieldRegion
                                             , details =
                                                 "Use this variable or append = _ to explicitly ignore it."
                                             , fix =
-                                                [ { path = modulePath
-                                                  , edits = [ ExtraCheck.insertAt punnedFieldRegion.end " = _" ]
-                                                  }
+                                                [ { path = moduleInfo.path
+                                                    , edits = [ ExtraCheck.insertAt punnedFieldRegion.end " = _" ]
+                                                    }
                                                 ]
                                             }
                                         ExtraCheck.OriginLetDefineVariable originLetDefine ->
-                                            { path = modulePath
+                                            { path = moduleInfo.path
                                             , message = "let-defined variable " ++ localVariable.name ++ " is never referenced"
                                             , region = originLetDefine.variableDefine.value.name |> ExtraCheck.locatedRegion
                                             , details =
                                                 "Use this variable or remove the let define. Alternatively, if you want to keep a value around for debugging, assign it to _ to explicitly ignore it."
                                             , fix =
-                                                [ { path = modulePath
-                                                  , edits =
+                                                [ { path = moduleInfo.path
+                                                    , edits =
                                                         if (originLetDefine.outerLetAllDefs |> Array.length) == 1 then
                                                             -- remove the full let .. in part before the body
                                                             [ ExtraCheck.removeRegion
@@ -693,251 +650,305 @@ report knowledge =
                                                             [ ExtraCheck.removeRegion
                                                                 (originLetDefine.variableDefine |> ExtraCheck.locatedRegion)
                                                             ]
-                                                  }
+                                                    }
                                                 ]
                                             }
                                     )
                         )
-                        soFarAcrossModules
-            )
-            (Array.Builder.empty 0)
-        |> (\builder ->
-                knowledge.typeNameOrigins
-                    |> Dict.foldl
+                    |> asInitForDictFoldlOver moduleInfo.types
                         (\typeName typeNameOrigin soFar ->
                             -- TODO if origin is choice type || any of its variants is used
-                            if (typeName |> typeNameIsUsed) then
+                            if ({ moduleOrigin = originModuleName, name = typeName } |> typeNameIsUsed) then
                                 soFar
 
                             else
-                                when knowledge.moduleHeaders |> Dict.get typeNameOrigin.modulePath is
-                                    Nothing ->
-                                        soFar
-                                    
-                                    Just originModuleHeader ->
-                                        let
-                                            { qualification = typeOriginModuleName, name = unqualifiedTypeName } =
-                                                typeName |> stringToReference
-                                            
-                                            errorRemoveTypeDeclarationWithAdditionalModuleEdit : Maybe ExtraCheck.SourceEdit -> ExtraCheck.Error
-                                            errorRemoveTypeDeclarationWithAdditionalModuleEdit maybeAdditionalModuleEdit =
-                                                { path = typeNameOrigin.modulePath
-                                                , message = "type " ++ typeName ++ " is never referenced"
-                                                , region = typeNameOrigin.nameRegion
-                                                , details = "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
-                                                , fix =
-                                                    knowledge.moduleHeaders
-                                                        |> Dict.foldl
-                                                            (\modulePath moduleHeader fixesSoFar ->
-                                                                when
-                                                                    moduleHeader.importsWithExplicitExposes
-                                                                        |> Dict.get typeOriginModuleName
-                                                                is
-                                                                    Nothing ->
-                                                                        fixesSoFar
-                                                                    
-                                                                    Just originModuleImport ->
-                                                                        when originModuleImport.exposes |> exposingRemoveTypeEdit unqualifiedTypeName is
-                                                                            Nothing ->
-                                                                                fixesSoFar
-
-                                                                            Just RemoveExposingEntirely ->
-                                                                                fixesSoFar
-                                                                                    |> Array.Builder.pushLast
-                                                                                        { path = modulePath
-                                                                                        , edits =
-                                                                                            [ ExtraCheck.replaceRegion originModuleImport.region
-                                                                                                ("import " ++ typeOriginModuleName
-                                                                                                    ++ (when originModuleImport.alias is
-                                                                                                            Nothing -> ""
-                                                                                                            Just alias -> " as " ++ alias
-                                                                                                       )
-                                                                                                )
-                                                                                            ]
-                                                                                        }
-
-                                                                            Just (RemoveExposingRegion exposeRemoveRegion) ->
-                                                                                fixesSoFar
-                                                                                    |> Array.Builder.pushLast
-                                                                                        { path = modulePath
-                                                                                        , edits = [ ExtraCheck.removeRegion exposeRemoveRegion ]
-                                                                                        }
-                                                            )
-                                                            (Array.Builder.empty 1
-                                                                |> Array.Builder.pushLast
-                                                                    { path = typeNameOrigin.modulePath
-                                                                    , edits =
-                                                                        when maybeAdditionalModuleEdit is
-                                                                            Nothing ->
-                                                                                [ ExtraCheck.removeRegion typeNameOrigin.declarationRegion ]
-
-                                                                            Just additionalModuleEdit ->
-                                                                                [ ExtraCheck.removeRegion typeNameOrigin.declarationRegion
-                                                                                , additionalModuleEdit
-                                                                                ]
-
-                                                                    }
-                                                            )
-                                                        |> Array.Builder.toArray
-                                                }
-
-                                            errorRemoveModule : {} -> ExtraCheck.Error
-                                            errorRemoveModule {} =
-                                                { path = typeNameOrigin.modulePath
-                                                , message = "type " ++ typeName ++ " is never referenced"
-                                                , region = typeNameOrigin.nameRegion
-                                                , details = "Use it or remove this whole module along with all imports, as this is the last exposed member. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
-                                                , fix = []
-                                                }
-                                        in
-                                        soFar
-                                            |> Array.Builder.pushLast
-                                                (when originModuleHeader.exposing_ is
-                                                    Compiler.Ast.Source.Open ->
-                                                        if originModuleHeader.declarationCount == 1 then
-                                                            errorRemoveModule {}
-
-                                                        else
-                                                            errorRemoveTypeDeclarationWithAdditionalModuleEdit Nothing
-
-                                                    Compiler.Ast.Source.Explicit originModuleExposes ->
-                                                        when originModuleExposes |> exposingRemoveTypeEdit unqualifiedTypeName is
-                                                            Nothing ->
-                                                                errorRemoveTypeDeclarationWithAdditionalModuleEdit Nothing
-
-                                                            Just RemoveExposingEntirely ->
-                                                                errorRemoveModule {}
-
-                                                            Just (RemoveExposingRegion exposeRemoveRegion) ->
-                                                                errorRemoveTypeDeclarationWithAdditionalModuleEdit
-                                                                    (Just (ExtraCheck.removeRegion exposeRemoveRegion))
-                                                )
+                                soFar
+                                    |> Array.Builder.pushLast
+                                        (unusedTypeError knowledge.moduleInfos
+                                            moduleInfo
+                                            originModuleName
+                                            typeName
+                                            typeNameOrigin
+                                        )
                         )
-                        builder
-           )
-        |> (\builder ->
-                knowledge.variableNameOrigins
-                    |> Dict.foldl
+                    |> asInitForDictFoldlOver moduleInfo.variables
                         (\variableName variableNameOrigin soFar ->
-                            if variableName |> variableNameIsUsed then
+                            if { moduleOrigin = originModuleName, name = variableName } |> variableNameIsUsed then
                                 soFar
 
                             else
-                                when knowledge.moduleHeaders |> Dict.get variableNameOrigin.modulePath is
-                                    Nothing ->
-                                        soFar
-                                    
-                                    Just originModuleHeader ->
-                                        let
-                                            { qualification = variableOriginModuleName, name = unqualifiedVariableName } =
-                                                variableName |> stringToReference
-                                            
-                                            errorRemoveVariableDeclarationWithAdditionalModuleEdit : Maybe ExtraCheck.SourceEdit -> ExtraCheck.Error
-                                            errorRemoveVariableDeclarationWithAdditionalModuleEdit maybeAdditionalModuleEdit =
-                                                { path = variableNameOrigin.modulePath
-                                                , message = variableName ++ " is never referenced"
-                                                , region = variableNameOrigin.nameRegion
-                                                , details = "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
-                                                , fix =
-                                                    knowledge.moduleHeaders
-                                                        |> Dict.foldl
-                                                            (\modulePath moduleHeader fixesSoFar ->
-                                                                when
-                                                                    moduleHeader.importsWithExplicitExposes
-                                                                        |> Dict.get variableOriginModuleName
-                                                                is
-                                                                    Nothing ->
-                                                                        fixesSoFar
-                                                                    
-                                                                    Just originModuleImport ->
-                                                                        when originModuleImport.exposes |> exposingRemoveVariableEdit unqualifiedVariableName is
-                                                                            Nothing ->
-                                                                                fixesSoFar
-
-                                                                            Just RemoveExposingEntirely ->
-                                                                                fixesSoFar
-                                                                                    |> Array.Builder.pushLast
-                                                                                        { path = modulePath
-                                                                                        , edits =
-                                                                                            [ ExtraCheck.replaceRegion originModuleImport.region
-                                                                                                ("import " ++ variableOriginModuleName
-                                                                                                    ++ (when originModuleImport.alias is
-                                                                                                            Nothing -> ""
-                                                                                                            Just alias -> " as " ++ alias
-                                                                                                       )
-                                                                                                )
-                                                                                            ]
-                                                                                        }
-
-                                                                            Just (RemoveExposingRegion exposeRemoveRegion) ->
-                                                                                fixesSoFar
-                                                                                    |> Array.Builder.pushLast
-                                                                                        { path = modulePath
-                                                                                        , edits = [ ExtraCheck.removeRegion exposeRemoveRegion ]
-                                                                                        }
-                                                            )
-                                                            (Array.Builder.empty 1
-                                                                |> Array.Builder.pushLast
-                                                                    { path = variableNameOrigin.modulePath
-                                                                    , edits =
-                                                                        [ ExtraCheck.removeRegion variableNameOrigin.declarationRegion ]
-                                                                            |> arrayPushLastJust maybeAdditionalModuleEdit
-                                                                            |> arrayPushLastJust
-                                                                                (when variableNameOrigin.portModuleKeywordStartIfPort is
-                                                                                    Nothing ->
-                                                                                        Nothing
-
-                                                                                    Just portModuleKeywordStart ->
-                                                                                        Just
-                                                                                            (ExtraCheck.replaceRegion
-                                                                                                { start = portModuleKeywordStart
-                                                                                                , end =
-                                                                                                    { portModuleKeywordStart
-                                                                                                    | col = portModuleKeywordStart.col + ("port module" |> String.unitLength)
-                                                                                                    }
-                                                                                                }
-                                                                                                "module"
-                                                                                            )
-                                                                               )
-                                                                    }
-                                                            )
-                                                        |> Array.Builder.toArray
-                                                }
-                                            errorRemoveModule : {} -> ExtraCheck.Error
-                                            errorRemoveModule {} =
-                                                { path = variableNameOrigin.modulePath
-                                                , message = variableName ++ " is never referenced"
-                                                , region = variableNameOrigin.nameRegion
-                                                , details = "Use it or remove this whole module along with all imports, as this is the last exposed member. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
-                                                , fix = []
-                                                }
-                                        in
-                                        soFar
-                                            |> Array.Builder.pushLast
-                                                (when originModuleHeader.exposing_ is
-                                                    Compiler.Ast.Source.Open ->
-                                                        if originModuleHeader.declarationCount == 1 then
-                                                            errorRemoveModule {}
-
-                                                        else
-                                                            errorRemoveVariableDeclarationWithAdditionalModuleEdit Nothing
-
-                                                    Compiler.Ast.Source.Explicit originModuleExposes ->
-                                                        when originModuleExposes |> exposingRemoveVariableEdit unqualifiedVariableName is
-                                                            Nothing ->
-                                                                errorRemoveVariableDeclarationWithAdditionalModuleEdit Nothing
-
-                                                            Just RemoveExposingEntirely ->
-                                                                errorRemoveModule {}
-
-                                                            Just (RemoveExposingRegion exposeRemoveRegion) ->
-                                                                errorRemoveVariableDeclarationWithAdditionalModuleEdit
-                                                                    (Just (ExtraCheck.removeRegion exposeRemoveRegion))
-                                                )
+                                soFar
+                                    |> Array.Builder.pushLast
+                                        (unusedModuleVariableError knowledge.moduleInfos
+                                            moduleInfo
+                                            originModuleName
+                                            variableName
+                                            variableNameOrigin
+                                        )
                         )
-                        builder
-           )
+            )
         |> Array.Builder.toArray
+
+
+unusedTypeError :
+    Dict.Dict
+        String
+        { info
+        | path : String
+        , exposing_ : Compiler.Ast.Source.Exposing
+        , importsWithExplicitExposes :
+            Dict.Dict String
+                { region : SourcePosition.Region
+                , alias : Maybe String
+                , exposes : Array Compiler.Ast.Source.Exposed
+                }
+        , declarationCount : Int
+        }
+    ->
+        { info
+        | path : String
+        , exposing_ : Compiler.Ast.Source.Exposing
+        , importsWithExplicitExposes :
+            Dict.Dict String
+                { region : SourcePosition.Region
+                , alias : Maybe String
+                , exposes : Array Compiler.Ast.Source.Exposed
+                }
+        , declarationCount : Int
+        }
+    -> String
+    -> String
+    ->
+        { nameRegion : SourcePosition.Region
+        , declarationRegion : SourcePosition.Region
+        }
+    -> ExtraCheck.Error
+unusedTypeError moduleHeaders originModuleHeader originModuleName typeName typeNameOrigin =
+    let                                            
+        errorRemoveTypeDeclarationWithAdditionalModuleEdit : Maybe ExtraCheck.SourceEdit -> ExtraCheck.Error
+        errorRemoveTypeDeclarationWithAdditionalModuleEdit maybeAdditionalModuleEdit =
+            { path = originModuleHeader.path
+            , message = "type " ++ originModuleName ++ "." ++ typeName ++ " is never referenced"
+            , region = typeNameOrigin.nameRegion
+            , details = "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+            , fix =
+                Array.Builder.empty 1
+                    |> Array.Builder.pushLast
+                        { path = originModuleHeader.path
+                        , edits =
+                            when maybeAdditionalModuleEdit is
+                                Nothing ->
+                                    [ ExtraCheck.removeRegion typeNameOrigin.declarationRegion ]
+
+                                Just additionalModuleEdit ->
+                                    [ ExtraCheck.removeRegion typeNameOrigin.declarationRegion
+                                    , additionalModuleEdit
+                                    ]
+                        }
+                    |> asInitForDictFoldlOver moduleHeaders
+                        (\_ moduleHeader fixesSoFar ->
+                            when
+                                moduleHeader.importsWithExplicitExposes
+                                    |> Dict.get originModuleName
+                            is
+                                Nothing ->
+                                    fixesSoFar
+                                
+                                Just originModuleImport ->
+                                    when originModuleImport.exposes |> exposingRemoveTypeEdit typeName is
+                                        Nothing ->
+                                            fixesSoFar
+
+                                        Just RemoveExposingEntirely ->
+                                            fixesSoFar
+                                                |> Array.Builder.pushLast
+                                                    { path = moduleHeader.path
+                                                    , edits =
+                                                        [ ExtraCheck.replaceRegion originModuleImport.region
+                                                            ("import " ++ originModuleName
+                                                                ++ (when originModuleImport.alias is
+                                                                        Nothing -> ""
+                                                                        Just alias -> " as " ++ alias
+                                                                )
+                                                            )
+                                                        ]
+                                                    }
+
+                                        Just (RemoveExposingRegion exposeRemoveRegion) ->
+                                            fixesSoFar
+                                                |> Array.Builder.pushLast
+                                                    { path = moduleHeader.path
+                                                    , edits = [ ExtraCheck.removeRegion exposeRemoveRegion ]
+                                                    }
+                        )
+                    |> Array.Builder.toArray
+            }
+
+        errorRemoveModule : {} -> ExtraCheck.Error
+        errorRemoveModule {} =
+            { path = originModuleHeader.path
+            , message = "type " ++ originModuleName ++ "." ++ typeName ++ " is never referenced"
+            , region = typeNameOrigin.nameRegion
+            , details = "Use it or remove this whole module along with all imports, as this is the last exposed member. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+            , fix = []
+            }
+    in
+    when originModuleHeader.exposing_ is
+        Compiler.Ast.Source.Open ->
+            if originModuleHeader.declarationCount == 1 then
+                errorRemoveModule {}
+
+            else
+                errorRemoveTypeDeclarationWithAdditionalModuleEdit Nothing
+
+        Compiler.Ast.Source.Explicit originModuleExposes ->
+            when originModuleExposes |> exposingRemoveTypeEdit typeName is
+                Nothing ->
+                    errorRemoveTypeDeclarationWithAdditionalModuleEdit Nothing
+
+                Just RemoveExposingEntirely ->
+                    errorRemoveModule {}
+
+                Just (RemoveExposingRegion exposeRemoveRegion) ->
+                    errorRemoveTypeDeclarationWithAdditionalModuleEdit
+                        (Just (ExtraCheck.removeRegion exposeRemoveRegion))
+
+
+unusedModuleVariableError :
+    Dict.Dict
+        String
+        { info
+        | path : String
+        , exposing_ : Compiler.Ast.Source.Exposing
+        , importsWithExplicitExposes :
+            Dict.Dict String
+                { region : SourcePosition.Region
+                , alias : Maybe String
+                , exposes : Array Compiler.Ast.Source.Exposed
+                }
+        , declarationCount : Int
+        }
+    ->
+        { info
+        | path : String
+        , exposing_ : Compiler.Ast.Source.Exposing
+        , importsWithExplicitExposes :
+            Dict.Dict String
+                { region : SourcePosition.Region
+                , alias : Maybe String
+                , exposes : Array Compiler.Ast.Source.Exposed
+                }
+        , declarationCount : Int
+        }
+    -> String
+    -> String
+    ->
+        { nameRegion : SourcePosition.Region
+        , declarationRegion : SourcePosition.Region
+        , portModuleKeywordStartIfPort : Maybe SourcePosition.Position
+        }
+    -> ExtraCheck.Error
+unusedModuleVariableError moduleHeaders originModuleHeader variableOriginModule variableName variableNameOrigin =
+    let
+        errorRemoveVariableDeclarationWithAdditionalModuleEdit : Maybe ExtraCheck.SourceEdit -> ExtraCheck.Error
+        errorRemoveVariableDeclarationWithAdditionalModuleEdit maybeAdditionalModuleEdit =
+            { path = originModuleHeader.path
+            , message = variableOriginModule ++ "." ++ variableName ++ " is never referenced"
+            , region = variableNameOrigin.nameRegion
+            , details = "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+            , fix =
+                Array.Builder.empty 1
+                    |> Array.Builder.pushLast
+                        { path = originModuleHeader.path
+                        , edits =
+                            [ ExtraCheck.removeRegion variableNameOrigin.declarationRegion ]
+                                |> arrayPushLastJust maybeAdditionalModuleEdit
+                                |> arrayPushLastJust
+                                    (when variableNameOrigin.portModuleKeywordStartIfPort is
+                                        Nothing ->
+                                            Nothing
+
+                                        Just portModuleKeywordStart ->
+                                            Just
+                                                (ExtraCheck.replaceRegion
+                                                    { start = portModuleKeywordStart
+                                                    , end =
+                                                        { portModuleKeywordStart
+                                                        | col = portModuleKeywordStart.col + ("port module" |> String.unitLength)
+                                                        }
+                                                    }
+                                                    "module"
+                                                )
+                                    )
+                        }
+                    |> asInitForDictFoldlOver moduleHeaders
+                        (\_ moduleHeader fixesSoFar ->
+                            when
+                                moduleHeader.importsWithExplicitExposes
+                                    |> Dict.get variableOriginModule
+                            is
+                                Nothing ->
+                                    fixesSoFar
+                                
+                                Just originModuleImport ->
+                                    when originModuleImport.exposes |> exposingRemoveVariableEdit variableName is
+                                        Nothing ->
+                                            fixesSoFar
+
+                                        Just RemoveExposingEntirely ->
+                                            fixesSoFar
+                                                |> Array.Builder.pushLast
+                                                    { path = moduleHeader.path
+                                                    , edits =
+                                                        [ ExtraCheck.replaceRegion originModuleImport.region
+                                                            ("import "
+                                                                ++ variableOriginModule
+                                                                ++ (when originModuleImport.alias is
+                                                                        Nothing -> ""
+                                                                        Just alias -> " as " ++ alias
+                                                                    )
+                                                            )
+                                                        ]
+                                                    }
+
+                                        Just (RemoveExposingRegion exposeRemoveRegion) ->
+                                            fixesSoFar
+                                                |> Array.Builder.pushLast
+                                                    { path = moduleHeader.path
+                                                    , edits = [ ExtraCheck.removeRegion exposeRemoveRegion ]
+                                                    }
+                        )
+                    |> Array.Builder.toArray
+            }
+
+        errorRemoveModule : {} -> ExtraCheck.Error
+        errorRemoveModule {} =
+            { path = originModuleHeader.path
+            , message = variableOriginModule ++ "." ++ variableName ++ " is never referenced"
+            , region = variableNameOrigin.nameRegion
+            , details = "Use it or remove this whole module along with all imports, as this is the last exposed member. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+            , fix = []
+            }
+    in
+    when originModuleHeader.exposing_ is
+        Compiler.Ast.Source.Open ->
+            if originModuleHeader.declarationCount == 1 then
+                errorRemoveModule {}
+
+            else
+                errorRemoveVariableDeclarationWithAdditionalModuleEdit Nothing
+
+        Compiler.Ast.Source.Explicit originModuleExposes ->
+            when originModuleExposes |> exposingRemoveVariableEdit variableName is
+                Nothing ->
+                    errorRemoveVariableDeclarationWithAdditionalModuleEdit Nothing
+
+                Just RemoveExposingEntirely ->
+                    errorRemoveModule {}
+
+                Just (RemoveExposingRegion exposeRemoveRegion) ->
+                    errorRemoveVariableDeclarationWithAdditionalModuleEdit
+                        (Just (ExtraCheck.removeRegion exposeRemoveRegion))
 
 
 type ExposingRemoveMemberEdit
@@ -1348,35 +1359,56 @@ unusedLocalVariablesAdd name origin scope soFar =
 
 
 typeReferencesInto :
-    Set.Set String
+    Dict.Dict String (Set.Set String)
     -> ({ qualification : String, name : String} -> String)
     -> Compiler.Ast.Source.Type_
-    -> Set.Set String
-typeReferencesInto into typeReferenceToOriginQualifiedString type_ =
+    -> Dict.Dict String (Set.Set String)
+typeReferencesInto into typeReferenceOriginModule type_ =
     type_
         |> ExtraCheck.typeImmediateSubsFold
-            (\sub soFar -> sub.value |> typeReferencesInto soFar typeReferenceToOriginQualifiedString)
+            (\sub soFar -> sub.value |> typeReferencesInto soFar typeReferenceOriginModule)
             (when type_ is
                 Compiler.Ast.Source.TType { name } ->
-                    into |> Set.set ({ qualification = "", name = name.value } |> typeReferenceToOriginQualifiedString)
+                    let
+                        originModule =
+                            { qualification = "", name = name.value } |> typeReferenceOriginModule
+                    in
+                    into |> dictSetSet originModule name.value
 
                 Compiler.Ast.Source.TTypeQual { qualifier = qualification, name } ->
-                    into |> Set.set ({ qualification = qualification, name = name } |> typeReferenceToOriginQualifiedString)
+                    let
+                        originModule =
+                            { qualification = qualification, name = name } |> typeReferenceOriginModule
+                    in
+                    into |> dictSetSet originModule name
                 
                 _ ->
                     into
             )
 
 
+dictSetSet :
+    comparableDictKey
+    -> comparableSetKey
+    -> Dict.Dict comparableDictKey (Set.Set comparableSetKey)
+    -> Dict.Dict comparableDictKey (Set.Set comparableSetKey)
+dictSetSet dictKey setKeyToInsert dict =
+    when dict |> Dict.get dictKey is
+        Nothing ->
+            dict |> Dict.set dictKey (Set.singleton setKeyToInsert)
+        Just setSoFar ->
+            dict |> Dict.set dictKey (setSoFar |> Set.set setKeyToInsert)
+
+
 expressionTypeReferencesInto :
-    Set.Set String
+    Dict.Dict String (Set.Set String)
     -> ({ qualification : String, name : String} -> String)
     -> Compiler.Ast.Source.Expression_
-    -> Set.Set String
-expressionTypeReferencesInto into typeReferenceToOriginQualifiedString expression =
+    -> Dict.Dict String (Set.Set String)
+expressionTypeReferencesInto into typeReferenceOriginModule expression =
     expression
         |> ExtraCheck.expressionImmediateSubsFold
-            (\sub soFar -> sub.value |> expressionTypeReferencesInto soFar typeReferenceToOriginQualifiedString)
+            (\sub soFar -> sub.value |> expressionTypeReferencesInto soFar typeReferenceOriginModule)
             (when expression is
                 Compiler.Ast.Source.Let letIn ->
                     letIn.defs
@@ -1386,7 +1418,7 @@ expressionTypeReferencesInto into typeReferenceToOriginQualifiedString expressio
                                     Compiler.Ast.Source.Define { typeSignature = Just signature } ->    
                                         signature.value
                                             |> typeReferencesInto soFarAcrossDefs
-                                                typeReferenceToOriginQualifiedString
+                                                typeReferenceOriginModule
 
                                     _ ->
                                         soFarAcrossDefs
@@ -1463,3 +1495,8 @@ arrayPushLastJust maybeNewLast array =
         
         Just newLast ->
             array |> Array.pushLast newLast
+
+
+asInitForDictFoldlOver : Dict.Dict key value -> (key -> value -> state -> state) -> state -> state
+asInitForDictFoldlOver dict reduce initialState =
+    dict |> Dict.foldl reduce initialState
