@@ -485,9 +485,9 @@ type alias Error =
     }
 
 
-{-| Specify where you don't want errors to be reported in:
+{-| Specify where you don't want errors to be reported in, **as posix paths**:
 
-  - an external library you copied over and don't want to modify more than necessary
+  - external libraries you copied over and don't want to modify more than necessary
   - generated source code which isn't supposed to be read and or over which you have little control
   - you wrote a check that is very specific and should only be applied for a portion of your codebase
 
