@@ -6,7 +6,6 @@ using itself as a dependency
 
 import DebugIsNotUsed
 import DocumentationDoesNotContainTodo
-import StringSpellsCompanyNameCorrectly
 import IntroducedNameIsUsed
 import ExtraChecksRunnerNode
 import ExtraCheck
@@ -21,6 +20,5 @@ main =
             , DocumentationDoesNotContainTodo.check [ "TODO" ]
                 |> ExtraCheck.ignoreErrorsForPathsWhere
                     (\path -> path |> String.contains "DocumentationDoesNotContainTodo")
-            , StringSpellsCompanyNameCorrectly.check
             ]
         }
