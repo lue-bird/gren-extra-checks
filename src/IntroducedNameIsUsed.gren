@@ -260,51 +260,79 @@ inspectModule module_ =
                     , exposingAll = Set.empty
                     , withExplicitExposes = Dict.empty
                     }
-
-
-        moduleVariableNames : Set.Set String
-        moduleVariableNames =
-            module_.syntax.values
-                |> Array.foldl
-                    (\valueOrFunctionDeclaration soFar ->
-                        soFar |> Set.set valueOrFunctionDeclaration.value.value.name.value
-                    )
-                    (when module_.syntax.effects is
-                        Compiler.Ast.Source.NoEffects ->
-                            Set.empty
-                        
-                        Compiler.Ast.Source.Manager _ ->
-                            Set.empty
-                        
-                        Compiler.Ast.Source.Ports ports ->
-                            ports
-                                |> Array.foldl
-                                    (\port_ soFar ->
-                                        soFar |> Set.set port_.value.value.name.value
-                                    )
-                                    Set.empty
-                    )
         
-        moduleTypeNames : Set.Set String
-        moduleTypeNames =
+        moduleTypeInfos =
             module_.syntax.aliases
                 |> Array.foldl
                     (\typeAlias soFar ->
-                        soFar |> Set.set typeAlias.value.value.name.value
+                        soFar
+                            |> Dict.set typeAlias.value.value.name.value
+                                { nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
+                                , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
+                                }
                     )
-                    Set.empty
-                    {-TODO (module_.syntax.unions
-                        |> Array.foldl
-                            (\choiceType soFar ->
-                                soFar |> Set.set choiceType.value.value.name.value
-                            )
-                            Set.empty
-                    )-}
+                    Dict.empty
+                    -- TODO
+                    -- (module_.syntax.unions
+                    --     |> Array.foldl
+                    --         (\choiceType soFar ->
+                    --             soFar
+                    --                 |> Dict.set module_.syntax.name.value
+                    --                     { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
+                    --                     , declarationRegion = choiceType |> ExtraCheck.locatedRegion
+                    --                     }
+                    --         )
+                    --         Dict.empty
+                    -- )
+
+        moduleVariableInfos =
+            module_.syntax.values
+                |> Array.foldl
+                    (\valueOrFunctionDeclaration soFar ->
+                        soFar
+                            |> Dict.set
+                                valueOrFunctionDeclaration.value.value.name.value
+                                { nameRegion =
+                                    valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion
+                                , declarationRegion =
+                                    valueOrFunctionDeclaration |> ExtraCheck.locatedRegion
+                                , portModuleKeywordStartIfPort = Nothing
+                                }
+                    )
+                    (when module_.syntax.effects is
+                        Compiler.Ast.Source.NoEffects ->
+                            Dict.empty
+                        
+                        Compiler.Ast.Source.Manager _ ->
+                            Dict.empty
+                        
+                        Compiler.Ast.Source.Ports ports ->
+                            let
+                                modulePortKeywordStart =
+                                    -- hack. better would be extracting this position from the AST itself
+                                    module_.source
+                                        |> String.firstIndexOf "port module"
+                                        |> Maybe.map
+                                            (\index -> index |> ExtraCheck.sourceUnitIndexToPosition module_.source)
+                            in
+                            ports
+                                |> Array.foldl
+                                    (\port_ soFar ->
+                                        soFar
+                                            |> Dict.set
+                                                port_.value.value.name.value
+                                                { nameRegion = port_.value.value.name |> ExtraCheck.locatedRegion
+                                                , declarationRegion = port_ |> ExtraCheck.locatedRegion
+                                                , portModuleKeywordStartIfPort = modulePortKeywordStart
+                                                }
+                                    )
+                                    Dict.empty
+                    )
         
         variableReferenceToModuleOrigin : { qualification : String, name : String } -> String
         variableReferenceToModuleOrigin reference =
             if reference.qualification |> String.isEmpty then
-                if moduleVariableNames |> Set.member reference.name then
+                if moduleVariableInfos |> Dict.member reference.name then
                     module_.syntax.name.value
                 
                 else
@@ -329,7 +357,7 @@ inspectModule module_ =
         typeReferenceToModuleOrigin : { qualification : String, name : String } -> String
         typeReferenceToModuleOrigin reference =
             if reference.qualification |> String.isEmpty then
-                if moduleTypeNames |> Set.member reference.name then
+                if moduleTypeInfos |> Dict.member reference.name then
                     module_.syntax.name.value
                 
                 else
@@ -448,70 +476,8 @@ inspectModule module_ =
                             Compiler.Ast.Source.Manager _ -> 0
                             Compiler.Ast.Source.Ports ports -> ports |> Array.length
                       )
-            , types =
-                module_.syntax.aliases
-                    |> Array.foldl
-                        (\typeAlias soFar ->
-                            soFar
-                                |> Dict.set typeAlias.value.value.name.value
-                                    { nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
-                                    , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
-                                    }
-                        )
-                        (module_.syntax.unions
-                            |> Array.foldl
-                                (\choiceType soFar ->
-                                    soFar
-                                        |> Dict.set module_.syntax.name.value
-                                            { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
-                                            , declarationRegion = choiceType |> ExtraCheck.locatedRegion
-                                            }
-                                )
-                                Dict.empty
-                        )
-            , variables =
-                module_.syntax.values
-                    |> Array.foldl
-                        (\valueOrFunctionDeclaration soFar ->
-                            soFar
-                                |> Dict.set
-                                    valueOrFunctionDeclaration.value.value.name.value
-                                    { nameRegion =
-                                        valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion
-                                    , declarationRegion =
-                                        valueOrFunctionDeclaration |> ExtraCheck.locatedRegion
-                                    , portModuleKeywordStartIfPort = Nothing
-                                    }
-                        )
-                        (when module_.syntax.effects is
-                            Compiler.Ast.Source.NoEffects ->
-                                Dict.empty
-                            
-                            Compiler.Ast.Source.Manager _ ->
-                                Dict.empty
-                            
-                            Compiler.Ast.Source.Ports ports ->
-                                let
-                                    modulePortKeywordStart =
-                                        -- hack. better would be extracting this position from the AST itself
-                                        module_.source
-                                            |> String.firstIndexOf "port module"
-                                            |> Maybe.map
-                                                (\index -> index |> ExtraCheck.sourceUnitIndexToPosition module_.source)
-                                in
-                                ports
-                                    |> Array.foldl
-                                        (\port_ soFar ->
-                                            soFar
-                                                |> Dict.set
-                                                    port_.value.value.name.value
-                                                    { nameRegion = port_.value.value.name |> ExtraCheck.locatedRegion
-                                                    , declarationRegion = port_ |> ExtraCheck.locatedRegion
-                                                    , portModuleKeywordStartIfPort = modulePortKeywordStart
-                                                    }
-                                        )
-                                        Dict.empty
-                        )
+            , types = moduleTypeInfos
+            , variables = moduleVariableInfos
             , unusedLocalVariables =
                 module_.syntax.values
                     |> Array.foldl
