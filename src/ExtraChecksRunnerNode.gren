@@ -63,7 +63,7 @@ type alias Program =
 {-| Model of a [`ExtraChecksRunnerNode.program`](#program)
 -}
 type ProgramState
-    = Exited
+    = Exiting
     | Running
         { environment : Node.Environment
         , fileSystemPermission : FileSystem.Permission
@@ -107,7 +107,6 @@ type ProgramEvent
     | ExtraFileWatchEvent { path : String, event : FileSystem.WatchEvent }
     | ExtraFileAddedOrChanged { path : FileSystem.Path.Path, source : Result String String }
     | ExtraFileRemoved { path : FileSystem.Path.Path }
-    | ErrorFixRejected
     | Typed (Result Stream.Error Bytes.Bytes)
 
 
@@ -329,7 +328,7 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                                         { path =
                                             module_.path
                                                 |> FileSystem.Path.toPosixString
-                                                -- TODO find less hacky solution to get the path
+                                                -- hacky solution to get the path
                                                 -- relative to the ..
                                                 |> String.dropFirst (String.unitLength "../")
                                         , source = module_.source
@@ -429,7 +428,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
         (\initialInfoOrError {} ->
             when initialInfoOrError is
                 Err error ->
-                    { model = Exited
+                    { model = Exiting
                     , command =
                         Platform.Cmd.batch
                             [ Stream.Log.line environment.stderr error |> taskExecute
@@ -443,7 +442,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
                             -- it probably makes sense to instead stay in some
                             -- "partially initialized state"
                             -- and still watch for valid files to arrive
-                            { model = Exited
+                            { model = Exiting
                             , command =
                                 Platform.Cmd.batch
                                     [ Stream.Log.line environment.stderr
@@ -480,50 +479,75 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
                                     , removedModulePaths = []
                                     }
                                         |> reviewRunList config.checks
-
-                                maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
-                                maybeNextFixableErrorOrAllUnfixable =
-                                    runResult.errorsByPath
-                                        |> errorsByPathToNextFixableErrorOrAll
-                                            { grenJsonSource = initialInfo.grenJson.source
-                                            , filesByPath = initialFilesByPath
-                                            }
                             in
-                            { model =
-                                Running
-                                    { environment = environment
-                                    , fileSystemPermission = fileSystemPermission
-                                    , nextRuns = runResult.nextRuns
-                                    , fixableErrorsAwaitingResponse =
-                                        maybeNextFixableErrorOrAllUnfixable
-                                            |> Maybe.andThen fixableOrAllUnfixableToFixable
-                                    , grenJson = initialInfo.grenJson
-                                    , filesByPath = initialFilesByPath
-                                    , directDependencies = initialInfo.directDependencies
-                                    }
-                            , command =
-                                Platform.Cmd.batch
-                                    [ when maybeNextFixableErrorOrAllUnfixable is
-                                        Nothing ->
-                                            noErrorsWaitingForChanges
-                                                { stdin = environment.stdin
-                                                , stdout = environment.stdout
-                                                }
+                            when maybeTerminalConfiguration is
+                                Nothing ->
+                                    { model = Exiting
+                                    , command =
+                                        if runResult.errorsByPath |> Dict.all (\_ errors -> errors |> Array.isEmpty) then
+                                            Platform.Cmd.batch
+                                                [ Stream.Log.line environment.stdout "no errors found"
+                                                    |> taskExecute
+                                                , Node.setExitCode 0 |> taskExecute
+                                                ]
 
-                                        Just nextFixableErrorOrAllUnfixable ->
-                                            errorsReceived
-                                                { fileSystemPermission = fileSystemPermission
-                                                , stdout = environment.stdout
-                                                }
-                                                { projectFilesByPath =
-                                                    initialFilesByPath
-                                                        |> Dict.set "gren.json" initialInfo.grenJson.source
-                                                , errors = nextFixableErrorOrAllUnfixable
-                                                }
-                                    , -- TODO not when outside of interactive shell, auto-reject in that case
-                                      Stream.read environment.stdin |> Task.attempt Typed
-                                    ]
-                            }
+                                        else
+                                            Platform.Cmd.batch
+                                                [ Stream.Log.string environment.stdout
+                                                    (runResult.errorsByPath
+                                                        |> checkErrorsToString { ansi = False }
+                                                            (initialFilesByPath
+                                                                |> Dict.set "gren.json" initialInfo.grenJson.source
+                                                            )
+                                                    )
+                                                    |> taskExecute
+                                                , Node.setExitCode 1 |> taskExecute
+                                                ]
+                                    }
+                                Just _ ->
+                                    let
+                                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                        maybeNextFixableErrorOrAllUnfixable =
+                                            runResult.errorsByPath
+                                                |> errorsByPathToNextFixableErrorOrAll
+                                                    { grenJsonSource = initialInfo.grenJson.source
+                                                    , filesByPath = initialFilesByPath
+                                                    }
+                                    in
+                                    { model =
+                                        Running
+                                            { environment = environment
+                                            , fileSystemPermission = fileSystemPermission
+                                            , nextRuns = runResult.nextRuns
+                                            , fixableErrorsAwaitingResponse =
+                                                maybeNextFixableErrorOrAllUnfixable
+                                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
+                                            , grenJson = initialInfo.grenJson
+                                            , filesByPath = initialFilesByPath
+                                            , directDependencies = initialInfo.directDependencies
+                                            }
+                                    , command =
+                                        Platform.Cmd.batch
+                                            [ when maybeNextFixableErrorOrAllUnfixable is
+                                                Nothing ->
+                                                    Stream.Log.line environment.stdout
+                                                        noErrorsWaitingForChangesString
+                                                        |> taskExecute
+
+                                                Just nextFixableErrorOrAllUnfixable ->
+                                                    errorsReceived
+                                                        { fileSystemPermission = fileSystemPermission
+                                                        , stdout = environment.stdout
+                                                        }
+                                                        { projectFilesByPath =
+                                                            initialFilesByPath
+                                                                |> Dict.set "gren.json" initialInfo.grenJson.source
+                                                        , errors = nextFixableErrorOrAllUnfixable
+                                                        }
+                                                        |> taskExecute
+                                            , Stream.read environment.stdin |> Task.attempt Typed
+                                            ]
+                                    }
         )
         |> Task.andMap
             (initialInfoTask
@@ -552,7 +576,7 @@ subscriptions :
     -> Platform.Sub.Sub ProgramEvent
 subscriptions config stateOrExited =
     when stateOrExited is
-        Exited ->
+        Exiting ->
             Platform.Sub.none
 
         Running state ->
@@ -649,8 +673,8 @@ update :
     -> { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
 update config event stateOrExited =
     when stateOrExited is
-        Exited ->
-            { model = Exited, command = Platform.Cmd.none }
+        Exiting ->
+            { model = Exiting, command = Platform.Cmd.none }
         
         Running state ->
             when event is
@@ -674,7 +698,7 @@ update config event stateOrExited =
                     in
                     when acceptedOrExitErr is
                         Err {} ->
-                            { model = Exited
+                            { model = Exiting
                             , command =
                                 Node.setExitCode 1 |> taskExecute
                             }
@@ -723,55 +747,48 @@ update config event stateOrExited =
                                         }
 
                                     else
-                                        -- TODO inline ErrorFixRejected
-                                        { model = stateOrExited
+                                        let
+                                            maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
+                                            maybeNextFixableErrorOrAllUnfixable =
+                                                otherErrors
+                                                    |> errorsByPathToNextFixableErrorOrAll
+                                                        { grenJsonSource = state.grenJson.source
+                                                        , filesByPath = state.filesByPath
+                                                        }
+                                        in
+                                        { model =
+                                            Running
+                                                { state
+                                                | fixableErrorsAwaitingResponse =
+                                                    maybeNextFixableErrorOrAllUnfixable
+                                                        |> Maybe.andThen fixableOrAllUnfixableToFixable
+                                                }
                                         , command =
                                             Platform.Cmd.batch
                                                 [ Stream.Log.line state.environment.stdout
                                                     "Ok, this fix was not applied.\n"
-                                                    |> Task.perform (\{} -> ErrorFixRejected)
+                                                    |> Task.andThen
+                                                        (\{} ->
+                                                            when maybeNextFixableErrorOrAllUnfixable is
+                                                                Nothing ->
+                                                                    Stream.Log.line state.environment.stdout
+                                                                        noErrorsWaitingForChangesString
+
+                                                                Just nextFixableErrorOrAllUnfixable ->
+                                                                    errorsReceived
+                                                                        { fileSystemPermission = state.fileSystemPermission
+                                                                        , stdout = state.environment.stdout
+                                                                        }
+                                                                        { projectFilesByPath =
+                                                                            state.filesByPath
+                                                                                |> Dict.set "gren.json" state.grenJson.source
+                                                                        , errors = nextFixableErrorOrAllUnfixable
+                                                                        }
+                                                        )
+                                                    |> taskExecute
                                                 , Stream.read state.environment.stdin |> Task.attempt Typed
                                                 ]
                                         }
-
-                ErrorFixRejected ->
-                    let
-                        maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
-                        maybeNextFixableErrorOrAllUnfixable =
-                            state.fixableErrorsAwaitingResponse
-                                |> Maybe.map .otherErrors
-                                |> Maybe.withDefault Dict.empty
-                                |> errorsByPathToNextFixableErrorOrAll
-                                    { grenJsonSource = state.grenJson.source
-                                    , filesByPath = state.filesByPath
-                                    }
-                    in
-                    { model =
-                        Running
-                            { state
-                            | fixableErrorsAwaitingResponse =
-                                maybeNextFixableErrorOrAllUnfixable
-                                    |> Maybe.andThen fixableOrAllUnfixableToFixable
-                            }
-                    , command =
-                        when maybeNextFixableErrorOrAllUnfixable is
-                            Nothing ->
-                                noErrorsWaitingForChanges
-                                    { stdin = state.environment.stdin
-                                    , stdout = state.environment.stdout
-                                    }
-
-                            Just nextFixableErrorOrAllUnfixable ->
-                                errorsReceived
-                                    { fileSystemPermission = state.fileSystemPermission
-                                    , stdout = state.environment.stdout
-                                    }
-                                    { projectFilesByPath =
-                                        state.filesByPath
-                                            |> Dict.set "gren.json" state.grenJson.source
-                                    , errors = nextFixableErrorOrAllUnfixable
-                                    }
-                    }
 
                 ModuleWatchEvent { sourceDirectory, event = watchEvent } ->
                     { model = stateOrExited
@@ -907,10 +924,9 @@ update config event stateOrExited =
                                     , command =
                                         when maybeNextFixableErrorOrAllUnfixable is
                                             Nothing ->
-                                                noErrorsWaitingForChanges
-                                                    { stdin = state.environment.stdin
-                                                    , stdout = state.environment.stdout
-                                                    }
+                                                Stream.Log.line state.environment.stdout
+                                                    noErrorsWaitingForChangesString
+                                                    |> taskExecute
 
                                             Just nextFixableErrorOrAllUnfixable ->
                                                 errorsReceived
@@ -922,6 +938,7 @@ update config event stateOrExited =
                                                             |> Dict.set "gren.json" state.grenJson.source
                                                     , errors = nextFixableErrorOrAllUnfixable
                                                     }
+                                                    |> taskExecute
                                     }
 
                 ModuleRemoved moduleRemoved ->
@@ -974,10 +991,9 @@ update config event stateOrExited =
                     , command =
                         when maybeNextFixableErrorOrAllUnfixable is
                             Nothing ->
-                                noErrorsWaitingForChanges
-                                    { stdin = state.environment.stdin
-                                    , stdout = state.environment.stdout
-                                    }
+                                Stream.Log.line state.environment.stdout
+                                    noErrorsWaitingForChangesString
+                                    |> taskExecute
 
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
@@ -989,6 +1005,7 @@ update config event stateOrExited =
                                             |> Dict.set "gren.json" state.grenJson.source
                                     , errors = nextFixableErrorOrAllUnfixable
                                     }
+                                    |> taskExecute
                     }
 
                 ExtraFileWatchEvent { path = extraPath, event = watchEvent } ->
@@ -1104,10 +1121,9 @@ update config event stateOrExited =
                             , command =
                                 when maybeNextFixableErrorOrAllUnfixable is
                                     Nothing ->
-                                        noErrorsWaitingForChanges
-                                            { stdin = state.environment.stdin
-                                            , stdout = state.environment.stdout
-                                            }
+                                        Stream.Log.line state.environment.stdout
+                                            noErrorsWaitingForChangesString
+                                            |> taskExecute
 
                                     Just nextFixableErrorOrAllUnfixable ->
                                         errorsReceived
@@ -1119,6 +1135,7 @@ update config event stateOrExited =
                                                     |> Dict.set "gren.json" state.grenJson.source
                                             , errors = nextFixableErrorOrAllUnfixable
                                             }
+                                            |> taskExecute
                             }
 
                 ExtraFileRemoved fileRemoved ->
@@ -1171,10 +1188,9 @@ update config event stateOrExited =
                     , command =
                         when maybeNextFixableErrorOrAllUnfixable is
                             Nothing ->
-                                noErrorsWaitingForChanges
-                                    { stdin = state.environment.stdin
-                                    , stdout = state.environment.stdout
-                                    }
+                                Stream.Log.line state.environment.stdout
+                                    noErrorsWaitingForChangesString
+                                    |> taskExecute
 
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
@@ -1186,6 +1202,7 @@ update config event stateOrExited =
                                             |> Dict.set "gren.json" state.grenJson.source
                                     , errors = nextFixableErrorOrAllUnfixable
                                     }
+                                    |> taskExecute
                     }
 
 
@@ -1198,17 +1215,46 @@ filePathAppendSubPathIfNotEqual subPath basePath =
         basePath |> FileSystem.Path.append subPath
 
 
-noErrorsWaitingForChanges { stdin, stdout } =
-    -- TODO if not in interactive terminal, exit
-    Stream.Log.line stdout
-        (Ansi.clear
-            ++ "No further errors currently, watching for changes... To stop, press ctrl+c"
-        )
-        |> taskExecute
+noErrorsWaitingForChangesString =
+    Ansi.clear
+        ++ "No further errors currently, watching for changes... To stop, press ctrl+c"
+
 
 ctrlCBytes : Bytes.Bytes
 ctrlCBytes =
     Bytes.Encode.encode (Bytes.Encode.unsignedInt8 3)
+
+
+checkErrorsToString :
+    { ansi : Bool }
+    -> Dict String String
+    -> Dict.Dict String (Array FileReviewError)
+    -> String
+checkErrorsToString ansiConfig projectFilesByPath checkErrors =
+    checkErrors
+        |> Dict.foldl
+            (\path pathErrors soFar ->
+                soFar
+                    ++ (pathErrors
+                            |> Array.map
+                                (\error ->
+                                    { path = path
+                                    , region = error.region
+                                    , message = error.message
+                                    , details = error.details
+                                    , fixedSources = []
+                                    }
+                                        |> errorDisplay ansiConfig
+                                            (projectFilesByPath
+                                                |> Dict.get path
+                                                |> Maybe.withDefault ""
+                                            )
+                                )
+                            |> String.join "\n\n"
+                    )
+                    ++ "\n\n\n"
+            )
+            ""
 
 
 errorsReceived :
@@ -1219,51 +1265,28 @@ errorsReceived :
         { projectFilesByPath : Dict String String
         , errors : NextFixableOrAllUnfixable
         }
-    -> Platform.Cmd.Cmd ProgramEvent
+    -> Task.Task x {}
 errorsReceived { fileSystemPermission, stdout } { projectFilesByPath, errors } =
     when errors is
         AllUnfixable unfixableErrors ->
             Stream.Log.string stdout
-                (Ansi.clear
-                    ++ (unfixableErrors
-                            |> Dict.foldl
-                                (\path pathErrors soFar ->
-                                    soFar
-                                        ++ (pathErrors
-                                                |> Array.map
-                                                    (\error ->
-                                                        { path = path
-                                                        , region = error.region
-                                                        , message = error.message
-                                                        , details = error.details
-                                                        , fixedSources = []
-                                                        }
-                                                            |> errorDisplay
-                                                                (projectFilesByPath
-                                                                    |> Dict.get path
-                                                                    |> Maybe.withDefault ""
-                                                                )
-                                                    )
-                                                |> String.join "\n\n"
-                                        )
-                                        ++ "\n\n\n"
-                                )
-                                ""
-                       )
-                )
-                |> taskExecute
+                (Ansi.clear ++ (unfixableErrors |> checkErrorsToString isAnsi projectFilesByPath))
 
-        Fixable { fixable, otherErrors } ->
+        Fixable { fixable, otherErrors = _ } ->
             Stream.Log.line stdout
                 (Ansi.clear
-                    ++ (fixable |> errorDisplay fixable.source)
+                    ++ (fixable |> errorDisplay isAnsi fixable.source)
                 )
                 |> Task.andThen
                     (\{} ->
                         Stream.Log.line stdout
                             "\nApply these edits by pressing y. Reject by pressing n"
                     )
-                |> taskExecute
+
+
+isAnsi : { ansi : Bool }
+isAnsi =
+    { ansi = True }
 
 
 failedToParseModulesMessage : Array { path : String, error : String } -> String
@@ -1590,7 +1613,8 @@ type alias FileReviewError =
 
 
 errorDisplay :
-    String
+    { ansi : Bool }
+    -> String
     ->
         { error_
             | path : String
@@ -1605,8 +1629,8 @@ errorDisplay :
                     }
         }
     -> String
-errorDisplay source error =
-    (error.message |> Ansi.cyan |> Ansi.bold)
+errorDisplay ({ ansi } as ansiConfig) source error =
+    (error.message |> applyIf ansi (\text -> text |> Ansi.cyan |> Ansi.bold))
         ++ "  in "
         ++ error.path
         ++ ":"
@@ -1614,7 +1638,7 @@ errorDisplay source error =
         ++ ":"
         ++ (error.region.start.col |> String.fromInt)
         ++ "\n\n"
-        ++ (codeExtract source error.region
+        ++ (codeExtract ansiConfig source error.region
                 |> String.split "\n"
                 |> Array.map (\line -> "|   " ++ line)
                 |> String.join "\n"
@@ -1633,7 +1657,7 @@ errorDisplay source error =
                                     "in "
                                         ++ fileFixedSource.path
                                         ++ "\n"
-                                        ++ sourceHighlightDifferentLines
+                                        ++ sourceHighlightDifferentLines ansiConfig
                                             fileFixedSource.originalSource
                                             fileFixedSource.fixedSource
                                 )
@@ -1642,8 +1666,17 @@ errorDisplay source error =
            )
 
 
-sourceHighlightDifferentLines : String -> String -> String
-sourceHighlightDifferentLines aString bString =
+applyIf : Bool -> (a -> a) -> a -> a
+applyIf bool f a =
+    if bool then
+        f a
+
+    else
+        a
+
+
+sourceHighlightDifferentLines : { ansi : Bool } -> String -> String -> String
+sourceHighlightDifferentLines { ansi } aString bString =
     let
         highlightedAndFinalNoChangeLines :
             { continuousNoChangeLines : Array.Builder.Builder String
@@ -1670,7 +1703,7 @@ sourceHighlightDifferentLines aString bString =
                                                 |> continuousNoChangeLinesCollapse
                                            )
                                         ++ "\n"
-                                        ++ Ansi.green ("|   " ++ line)
+                                        ++ applyIf ansi Ansi.green ("|   " ++ line)
                                 }
 
                             Diff.Removed line ->
@@ -1682,7 +1715,7 @@ sourceHighlightDifferentLines aString bString =
                                                 |> continuousNoChangeLinesCollapse
                                            )
                                         ++ "\n"
-                                        ++ Ansi.red ("|   " ++ line)
+                                        ++ applyIf ansi Ansi.red ("|   " ++ line)
                                 }
                     )
                     { continuousNoChangeLines = Array.Builder.empty 0, highlighted = "" }
@@ -1724,8 +1757,9 @@ continuousNoChangeLinesCollapse noChangeLines =
                             ++ lastLine
 
 
-codeExtract : String -> SourcePosition.Region -> String
-codeExtract source region =
+codeExtract : { ansi : Bool } -> String -> SourcePosition.Region -> String
+codeExtract ({ ansi } as ansiConfig) source region =
+    -- can be optimized
     let
         sourceLines : Array String
         sourceLines =
@@ -1747,7 +1781,7 @@ codeExtract source region =
         else
             [ sourceLineAtRow (region.start.row - 2)
             , sourceLineAtRow (region.start.row - 1)
-                |> withErrorHighlightedRange
+                |> withErrorHighlightedRange ansiConfig
                     { start = region.start.col, end = region.end.col }
             , sourceLineAtRow region.end.row
             ]
@@ -1755,42 +1789,46 @@ codeExtract source region =
                 |> String.join "\n"
 
     else
-        [ [ sourceLineAtRow (region.start.row - 2)
-          , let
+        ([ sourceLineAtRow (region.start.row - 2)
+         , let
                 startLineContent : String
                 startLineContent =
                     sourceLineAtRow (region.start.row - 1)
             in
             startLineContent
-                |> withErrorHighlightedRange
+                |> withErrorHighlightedRange ansiConfig
                     { start = region.start.col
                     , end = (startLineContent |> String.count) + 1
                     }
-          ]
+         ]
             |> Array.keepIf (\l -> not (l |> String.isEmpty))
             |> String.join "\n"
-        , Array.range region.start.row (region.end.row - 2)
-            |> Array.map
-                (\middleLine ->
-                    sourceLineAtRow middleLine |> Ansi.backgroundRed
-                )
-            |> String.join "\n"
-        , [ let
-                endLineContent : String
-                endLineContent =
-                    sourceLineAtRow (region.end.row - 1)
-            in
-            endLineContent
-                |> withErrorHighlightedRange
-                    { start = getIndexOfFirstNonSpace endLineContent + 1
-                    , end = region.end.col
-                    }
-          , sourceLineAtRow region.end.row
-          ]
-            |> Array.keepIf (\l -> not (l |> String.isEmpty))
-            |> String.join "\n"
-        ]
-            |> String.join "\n"
+        )
+            ++ "\n"
+            ++ (Array.range region.start.row (region.end.row - 2)
+                |> Array.map
+                    (\middleLine ->
+                        sourceLineAtRow middleLine
+                            |> applyIf ansi Ansi.backgroundRed
+                    )
+                |> String.join "\n"
+               )
+            ++ "\n"
+            ++ ([ let
+                        endLineContent : String
+                        endLineContent =
+                            sourceLineAtRow (region.end.row - 1)
+                  in
+                  endLineContent
+                        |> withErrorHighlightedRange ansiConfig
+                            { start = getIndexOfFirstNonSpace endLineContent + 1
+                            , end = region.end.col
+                            }
+                , sourceLineAtRow region.end.row
+                ]
+                    |> Array.keepIf (\l -> not (l |> String.isEmpty))
+                    |> String.join "\n"
+               )
 
 
 getIndexOfFirstNonSpace : String -> Int
@@ -1798,13 +1836,13 @@ getIndexOfFirstNonSpace string =
     (string |> String.unitLength) - (string |> String.trimLeft |> String.unitLength)
 
 
-withErrorHighlightedRange : { start : Int, end : Int } -> (String -> String)
-withErrorHighlightedRange lineRange lineContent =
+withErrorHighlightedRange : { ansi : Bool } -> { start : Int, end : Int } -> (String -> String)
+withErrorHighlightedRange { ansi } lineRange lineContent =
     (lineContent |> String.takeFirst (lineRange.start - 1))
         ++ (lineContent
                 |> String.dropFirst (lineRange.start - 1)
                 |> String.takeFirst (lineRange.end - lineRange.start)
-                |> Ansi.backgroundRed
+                |> applyIf ansi Ansi.backgroundRed
            )
         ++ (lineContent
                 |> String.dropFirst
