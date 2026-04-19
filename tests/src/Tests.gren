@@ -520,7 +520,7 @@ tests =
                             [ { path = "src/A.gren"
                               , message = "punned pattern field unusedParameter is never referenced"
                               , details =
-                                    "Use this variable or append = _ to explicitly ignore it."
+                                    "Use the variable with this field's name, remove the field from the pattern (and potentially the signature) or append = _ to explicitly ignore it."
                               , region = ExtraCheck.ExpectUnder "unusedParameter"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
@@ -599,6 +599,58 @@ tests =
                                             """
                                             module A exposing (main)
                                             main = ""
+
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
+            , Test.test "module-defined variable in exposed module but not exposed"
+                (\{} ->
+                    { projectConfiguration =
+                        { grenJson =
+                            """
+                            {
+                                "type": "package",
+                                "name": "example/example",
+                                "version": "1.0.0",
+                                "summary": "example",
+                                "platform": "common",
+                                "license": "MIT",
+                                "gren-version": "0.6.3 <= v < 0.7.0",
+                                "exposed-modules": [ "A" ],
+                                "dependencies": {
+                                    "gren-lang/core": "7.4.0 <= v < 8.0.0"
+                                }
+                            }
+                            """
+                        , directDependencies = []
+                        }
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (used)
+                                used = ""
+                                unusedVariable = ""
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.unusedVariable is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "unusedVariable"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (used)
+                                            used = ""
 
                                             """
                                       }

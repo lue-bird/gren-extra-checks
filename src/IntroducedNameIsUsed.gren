@@ -529,13 +529,33 @@ inspectModule module_ =
 report : Knowledge -> Array ExtraCheck.Error
 report knowledge =
     let
-        typeNameIsUsed : { moduleOrigin : String, name : String } -> Bool
-        typeNameIsUsed { moduleOrigin, name } =
+        typeNameIsUsed : Compiler.Ast.Source.Exposing -> { moduleOrigin : String, name : String } -> Bool
+        typeNameIsUsed moduleOriginExposing { moduleOrigin, name } =
             (knowledge.usedTypeNames
                 |> Dict.get moduleOrigin
                 |> Maybe.checkValue (\usedNames -> usedNames |> Set.member name)
             )
-                || (knowledge.exposedModules |> Set.member moduleOrigin)
+                || ((knowledge.exposedModules |> Set.member moduleOrigin)
+                        && (when moduleOriginExposing is
+                                Compiler.Ast.Source.Open ->
+                                    True
+
+                                Compiler.Ast.Source.Explicit moduleOriginExposes ->
+                                    moduleOriginExposes
+                                        |> Array.any
+                                            (\moduleOriginExpose ->
+                                                when moduleOriginExpose is
+                                                    Compiler.Ast.Source.ExposedUpper moduleOriginExposedType ->
+                                                        name == moduleOriginExposedType.name.value
+                                                    
+                                                    Compiler.Ast.Source.ExposedLower _ ->
+                                                        False
+                                                    
+                                                    Compiler.Ast.Source.ExposedOperator _ ->
+                                                        False
+                                            )
+                           )
+                   )
                 || (knowledge.modulesImportingExposingAll
                         |> Dict.any
                             (\_ moduleImportingExposingAll ->
@@ -548,14 +568,34 @@ report knowledge =
                             )
                    )
 
-        variableNameIsUsed : { moduleOrigin : String, name : String } -> Bool
-        variableNameIsUsed { moduleOrigin, name } =
+        variableNameIsUsed : Compiler.Ast.Source.Exposing -> { moduleOrigin : String, name : String } -> Bool
+        variableNameIsUsed moduleOriginExposing { moduleOrigin, name } =
             (knowledge.usedVariableNames
                 |> Dict.get moduleOrigin
                 |> Maybe.checkValue (\usedNames -> usedNames |> Set.member name)
             )
                 || (name == "main")
-                || (knowledge.exposedModules |> Set.member moduleOrigin)
+                || ((knowledge.exposedModules |> Set.member moduleOrigin)
+                        && (when moduleOriginExposing is
+                                Compiler.Ast.Source.Open ->
+                                    True
+
+                                Compiler.Ast.Source.Explicit moduleOriginExposes ->
+                                    moduleOriginExposes
+                                        |> Array.any
+                                            (\moduleOriginExpose ->
+                                                when moduleOriginExpose is                                                    
+                                                    Compiler.Ast.Source.ExposedLower moduleOriginExposedVariable ->
+                                                        name == moduleOriginExposedVariable.value
+
+                                                    Compiler.Ast.Source.ExposedUpper _ ->
+                                                        False
+                                                    
+                                                    Compiler.Ast.Source.ExposedOperator _ ->
+                                                        False
+                                            )
+                           )
+                   )
                 || (knowledge.modulesImportingExposingAll
                         |> Dict.any
                             (\_ moduleImportingExposingAll ->
@@ -585,8 +625,8 @@ report knowledge =
                                                 "Use this variable or prepend an underscore to explicitly ignore it."
                                             , fix =
                                                 [ { path = moduleInfo.path
-                                                    , edits = [ ExtraCheck.insertAt patternVariableRegion.start "_" ]
-                                                    }
+                                                  , edits = [ ExtraCheck.insertAt patternVariableRegion.start "_" ]
+                                                  }
                                                 ]
                                             }
                                         ExtraCheck.OriginPatternPunnedField punnedFieldRegion ->
@@ -594,11 +634,11 @@ report knowledge =
                                             , message = "punned pattern field " ++ localVariable.name ++ " is never referenced"
                                             , region = punnedFieldRegion
                                             , details =
-                                                "Use this variable or append = _ to explicitly ignore it."
+                                                "Use the variable with this field's name, remove the field from the pattern (and potentially the signature) or append = _ to explicitly ignore it."
                                             , fix =
                                                 [ { path = moduleInfo.path
-                                                    , edits = [ ExtraCheck.insertAt punnedFieldRegion.end " = _" ]
-                                                    }
+                                                  , edits = [ ExtraCheck.insertAt punnedFieldRegion.end " = _" ]
+                                                  }
                                                 ]
                                             }
                                         ExtraCheck.OriginLetDefineVariable originLetDefine ->
@@ -630,7 +670,7 @@ report knowledge =
                     |> asInitForDictFoldlOver moduleInfo.types
                         (\typeName typeNameOrigin soFar ->
                             -- TODO if origin is choice type || any of its variants is used
-                            if ({ moduleOrigin = originModuleName, name = typeName } |> typeNameIsUsed) then
+                            if ({ moduleOrigin = originModuleName, name = typeName } |> typeNameIsUsed moduleInfo.exposing_) then
                                 soFar
 
                             else
@@ -645,7 +685,7 @@ report knowledge =
                         )
                     |> asInitForDictFoldlOver moduleInfo.variables
                         (\variableName variableNameOrigin soFar ->
-                            if { moduleOrigin = originModuleName, name = variableName } |> variableNameIsUsed then
+                            if { moduleOrigin = originModuleName, name = variableName } |> variableNameIsUsed moduleInfo.exposing_ then
                                 soFar
 
                             else
