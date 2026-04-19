@@ -970,6 +970,105 @@ tests =
                               }
                             ]
                 )
+            , Test.test "module-defined choice type whose type is not used but whose variant is used in the module it is declared in"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = UseVariant
+                                type Used = UseVariant
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined choice type whose type is not used but whose variant is used in another module (explicit import)"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                import B
+                                main = B.UseVariant
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (Used(..))
+                                type Used = UseVariant
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined choice type whose type is not used but whose variant is used in another module (through import exposing Type(..))"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                import B exposing (Used(..))
+                                main = UseVariant
+                                """
+                          }
+                        , { path = "src/B.gren"
+                          , source =
+                                """
+                                module B exposing (Used(..))
+                                type Used = UseVariant
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined choice type"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = ""
+                                type Unused = UnUsedVariant
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "type A.Unused is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "Unused"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main = ""
+
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
             ]
         , Test.describe "StringSpellsCompanyNameCorrectly"
             [ Test.test "fruits.com in string is accepted"

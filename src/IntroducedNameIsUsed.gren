@@ -38,7 +38,7 @@ reporting these would be more annoying than helpful.
 
 ### potential future improvements
 
-  - report unused choice types and variants.
+  - report unused variants.
     While possible, it would have false negatives (e.g. when constructing a variant for equality checking)
     and impossible to fix as deciding which cases to remove from a `when is`
     often requires exhaustiveness analysis.
@@ -87,6 +87,7 @@ type alias Knowledge =
                     String
                     { nameRegion : SourcePosition.Region
                     , declarationRegion : SourcePosition.Region
+                    , variantNames : Set.Set String
                     }
             , variables :
                 Dict.Dict
@@ -110,7 +111,8 @@ type alias Knowledge =
             -- module origin
             String
             (Set.Set String)
-    , usedVariableNames :
+    , -- includes variant names
+      usedVariableNames :
         Dict.Dict
             -- module origin
             String
@@ -120,6 +122,8 @@ type alias Knowledge =
             -- module path
             String
             { importedModulesExposingAll : Set.Set String
+            , importedModulesExposingChoiceTypesExposingAllVariants :
+                Dict.Dict String (Set.Set String)
             , variableNameUses : Set.Set String
             , typeNameUses : Set.Set String
             }
@@ -218,6 +222,8 @@ inspectModule module_ =
         imports :
             { byAlias : Dict.Dict String String
             , exposedTypeNames : Dict.Dict String String
+            , exposingChoiceTypesExposingAllVariants :
+                Dict.Dict String (Set.Set String)
             , exposedVariableNames : Dict.Dict String String
             , exposingAll : Set.Set String
             , withExplicitExposes :
@@ -239,6 +245,7 @@ inspectModule module_ =
                                         { byAlias = soFarAcrossImports.byAlias
                                         , exposedTypeNames = soFarAcrossImports.exposedTypeNames
                                         , exposedVariableNames = soFarAcrossImports.exposedVariableNames
+                                        , exposingChoiceTypesExposingAllVariants = soFarAcrossImports.exposingChoiceTypesExposingAllVariants
                                         , withExplicitExposes = soFarAcrossImports.withExplicitExposes
                                         , exposingAll =
                                             soFarAcrossImports.exposingAll |> Set.set import_.value.module_.value
@@ -254,16 +261,25 @@ inspectModule module_ =
                                                                 withExposesSoFar.exposedVariableNames
                                                                      |> Dict.set exposedVariableName.value import_.value.module_.value
                                                             , exposedTypeNames = withExposesSoFar.exposedTypeNames
+                                                            , exposingChoiceTypesExposingAllVariants = withExposesSoFar.exposingChoiceTypesExposingAllVariants
                                                             , byAlias = withExposesSoFar.byAlias
                                                             , exposingAll = withExposesSoFar.exposingAll
                                                             , withExplicitExposes = withExposesSoFar.withExplicitExposes
                                                             }
                                                         Compiler.Ast.Source.ExposedOperator _ ->
                                                             withExposesSoFar
-                                                        Compiler.Ast.Source.ExposedUpper { name = exposedTypeName, privacy = _ } ->
+                                                        Compiler.Ast.Source.ExposedUpper { name = exposedTypeName, privacy } ->
                                                             { exposedTypeNames =
                                                                 withExposesSoFar.exposedTypeNames
                                                                     |> Dict.set exposedTypeName.value import_.value.module_.value
+                                                            , exposingChoiceTypesExposingAllVariants =
+                                                                when privacy is
+                                                                    Compiler.Ast.Source.Public ->
+                                                                        withExposesSoFar.exposingChoiceTypesExposingAllVariants
+                                                                            |> dictSetSet import_.value.module_.value exposedTypeName.value
+
+                                                                    Compiler.Ast.Source.Private ->
+                                                                        withExposesSoFar.exposingChoiceTypesExposingAllVariants
                                                             , byAlias = withExposesSoFar.byAlias
                                                             , exposedVariableNames = withExposesSoFar.exposedVariableNames
                                                             , exposingAll = withExposesSoFar.exposingAll
@@ -274,6 +290,7 @@ inspectModule module_ =
                                                 , exposedTypeNames = soFarAcrossImports.exposedTypeNames
                                                 , exposedVariableNames = soFarAcrossImports.exposedVariableNames
                                                 , exposingAll = soFarAcrossImports.exposingAll
+                                                , exposingChoiceTypesExposingAllVariants = soFarAcrossImports.exposingChoiceTypesExposingAllVariants
                                                 , withExplicitExposes =
                                                     soFarAcrossImports.withExplicitExposes
                                                         |> Dict.set import_.value.module_.value
@@ -290,6 +307,7 @@ inspectModule module_ =
                             Just alias ->
                                 { exposedTypeNames = soFarWithExposing.exposedTypeNames
                                 , exposedVariableNames = soFarWithExposing.exposedVariableNames
+                                , exposingChoiceTypesExposingAllVariants = soFarWithExposing.exposingChoiceTypesExposingAllVariants
                                 , exposingAll = soFarWithExposing.exposingAll
                                 , withExplicitExposes = soFarWithExposing.withExplicitExposes
                                 , byAlias =
@@ -300,6 +318,7 @@ inspectModule module_ =
                     { byAlias = Dict.empty
                     , exposedTypeNames = Dict.empty
                     , exposedVariableNames = Dict.empty
+                    , exposingChoiceTypesExposingAllVariants = Dict.empty
                     , exposingAll = Set.empty
                     , withExplicitExposes = Dict.empty
                     }
@@ -312,20 +331,27 @@ inspectModule module_ =
                             |> Dict.set typeAlias.value.value.name.value
                                 { nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
                                 , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
+                                , variantNames = Set.empty
                                 }
                     )
-                    Dict.empty
-                    -- (module_.syntax.unions
-                    --     |> Array.foldl
-                    --         (\choiceType soFar ->
-                    --             soFar
-                    --                 |> Dict.set module_.syntax.name.value
-                    --                     { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
-                    --                     , declarationRegion = choiceType |> ExtraCheck.locatedRegion
-                    --                     }
-                    --         )
-                    --         Dict.empty
-                    -- )
+                    (module_.syntax.unions
+                        |> Array.foldl
+                            (\choiceType soFar ->
+                                soFar
+                                    |> Dict.set choiceType.value.value.name.value
+                                        { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
+                                        , declarationRegion = choiceType |> ExtraCheck.locatedRegion
+                                        , variantNames =
+                                            choiceType.value.value.variants
+                                                |> Array.foldl
+                                                    (\variant variantNamesSoFar ->
+                                                        variantNamesSoFar |> Set.set variant.value.name.value
+                                                    )
+                                                    Set.empty
+                                        }
+                            )
+                            Dict.empty
+                    )
 
         moduleVariableInfos =
             module_.syntax.values
@@ -376,7 +402,15 @@ inspectModule module_ =
             -- this does not take implicit imports into account.
             -- should still be fine since these will never be queried
             if reference.qualification |> String.isEmpty then
-                if moduleVariableInfos |> Dict.member reference.name then
+                if
+                    (moduleVariableInfos |> Dict.member reference.name)
+                        || (moduleTypeInfos
+                                |> Dict.any
+                                    (\_ typeInfo ->
+                                        typeInfo.variantNames |> Set.member reference.name
+                                    )
+                           )
+                then
                     module_.syntax.name.value
                 
                 else
@@ -385,7 +419,7 @@ inspectModule module_ =
                             originModuleName
 
                         Nothing ->
-                            -- is from exposing (..)
+                            -- is from (..)
                             ""
 
             else
@@ -435,10 +469,16 @@ inspectModule module_ =
                                 (moduleVariable.value.value.args
                                     |> ExtraCheck.patternArrayVariablesFold Dict.set Dict.empty
                                 )
-                                (\reference _ soFar ->
+                                (\reference soFar ->
                                     soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
                                 )
-                                soFarAcrossModuleVariables
+                                (moduleVariable.value.value.args
+                                    |> patternArrayUsedVariantsFold
+                                        (\reference soFar ->
+                                            soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
+                                        )
+                                        soFarAcrossModuleVariables
+                                )
                     )
                     Dict.empty
 
@@ -551,12 +591,19 @@ inspectModule module_ =
         usedVariablesIncludingUnqualifiedFromExposingAll
             |> Dict.remove ""
     , modulesImportingExposingAll =
-        if imports.exposingAll |> Set.isEmpty then
+        if
+            (imports.exposingAll |> Set.isEmpty)
+                && (imports.exposingChoiceTypesExposingAllVariants
+                        |> Dict.isEmpty
+                   )
+        then
             Dict.empty
         
         else
             Dict.singleton module_.path
-                { importedModulesExposingAll = imports.exposingAll
+                { importedModulesExposingChoiceTypesExposingAllVariants =
+                    imports.exposingChoiceTypesExposingAllVariants
+                , importedModulesExposingAll = imports.exposingAll
                 , typeNameUses =
                     usedTypesIncludingUnqualifiedFromExposingAll
                         |> Dict.get ""
@@ -643,12 +690,34 @@ report knowledge =
                 || (knowledge.modulesImportingExposingAll
                         |> Dict.any
                             (\_ moduleImportingExposingAll ->
-                                (moduleImportingExposingAll.importedModulesExposingAll
-                                    |> Set.member moduleOrigin
+                                (moduleImportingExposingAll.variableNameUses
+                                    |> Set.member name
                                 )
-                                    && (moduleImportingExposingAll.variableNameUses
-                                            |> Set.member name
-                                        )
+                                    && (moduleImportingExposingAll.importedModulesExposingAll
+                                            |> Set.member moduleOrigin
+                                       )
+                            )
+                   )
+        
+        variantNameIsUsed :
+            Compiler.Ast.Source.Exposing
+            -> { typeOrigin : String, moduleOrigin : String, name : String }
+            -> Bool
+        variantNameIsUsed moduleOriginExposing { typeOrigin, moduleOrigin, name } =
+            variableNameIsUsed moduleOriginExposing { moduleOrigin = moduleOrigin, name = name }
+                || (knowledge.modulesImportingExposingAll
+                        |> Dict.any
+                            (\_ moduleImportingExposingAll ->
+                                (moduleImportingExposingAll.variableNameUses
+                                    |> Set.member name
+                                )
+                                    && (moduleImportingExposingAll.importedModulesExposingChoiceTypesExposingAllVariants
+                                            |> Dict.get moduleOrigin
+                                            |> Maybe.checkValue
+                                                (\openTypeExposes ->
+                                                    openTypeExposes |> Set.member typeOrigin
+                                                )
+                                       )
                             )
                    )
         
@@ -780,8 +849,18 @@ report knowledge =
                         )
                     |> asInitForDictFoldlOver moduleInfo.types
                         (\typeName typeNameOrigin soFar ->
-                            -- if origin is choice type || any of its variants is used
-                            if ({ moduleOrigin = originModuleName, name = typeName } |> typeNameIsUsed moduleInfo.exposing_) then
+                            if
+                                ({ moduleOrigin = originModuleName, name = typeName }
+                                    |> typeNameIsUsed moduleInfo.exposing_
+                                )
+                                    || (typeNameOrigin.variantNames
+                                            |> Set.any
+                                                (\variantName ->
+                                                    { moduleOrigin = originModuleName, typeOrigin = typeName, name = variantName }
+                                                        |> variantNameIsUsed moduleInfo.exposing_
+                                                )
+                                       )
+                            then
                                 soFar
 
                             else
@@ -844,6 +923,7 @@ unusedTypeError :
     ->
         { nameRegion : SourcePosition.Region
         , declarationRegion : SourcePosition.Region
+        , variantNames : Set.Set String
         }
     -> ExtraCheck.Error
 unusedTypeError moduleHeaders originModuleHeader originModuleName typeName typeNameOrigin =
@@ -1209,40 +1289,102 @@ exposingRemoveTypeEdit typeToRemove exposes =
                 )
 
 
+{-| Fold over variable and variant references
+-}
 expressionUsedReferencesFoldExcludingLocalVariables :
     Dict.Dict String ExtraCheck.LocalVariableOrigin
-    -> ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
+    -> ({ qualification : String, name : String } -> state -> state)
     -> state
     -> Compiler.Ast.Source.Expression
     -> state
 expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithReference initialState expression =
-    when expression.value is
-        Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
-            if localVariables |> Dict.member variable then
-                initialState
-
-            else
-                initialState
-                    |> reduceWithReference { qualification = "", name = variable }
-                        (expression |> expressionRegion)
-        
-        Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
-            initialState
-                |> reduceWithReference { qualification = qualification, name = name }
-                    (expression |> expressionRegion)
-        
-        _ ->
-            expression
-                |> ExtraCheck.expressionImmediateSubsFoldWithIntroducedVariables
-                    localVariables
-                    (\sub localVariablesForSub soFar ->
-                        sub
-                            |> expressionUsedReferencesFoldExcludingLocalVariables
-                                localVariablesForSub
-                                reduceWithReference
-                                soFar
-                    )
+    expression
+        |> ExtraCheck.expressionImmediateSubsFoldWithIntroducedVariables
+            localVariables
+            (\sub localVariablesForSub soFar ->
+                sub
+                    |> expressionUsedReferencesFoldExcludingLocalVariables
+                        localVariablesForSub
+                        reduceWithReference
+                        soFar
+            )
+            (when expression.value is
+                Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.CapVar, name = variable } ->
                     initialState
+                        |> reduceWithReference { qualification = "", name = variable }
+                
+                Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
+                    if localVariables |> Dict.member variable then
+                        initialState
+
+                    else
+                        initialState
+                            |> reduceWithReference { qualification = "", name = variable }
+                
+                Compiler.Ast.Source.VarQual { varType = _, qualifier = qualification, name } ->
+                    initialState
+                        |> reduceWithReference { qualification = qualification, name = name }
+                
+                Compiler.Ast.Source.Lambda { patterns, body = _ } ->
+                    patterns |> patternArrayUsedVariantsFold reduceWithReference initialState
+                
+                Compiler.Ast.Source.When { expression = _, branches = cases } ->
+                    cases
+                        |> Array.foldl
+                            (\case soFar ->
+                                case.pattern |> patternUsedVariantsFold reduceWithReference soFar
+                            )
+                            initialState
+                
+                Compiler.Ast.Source.Let { defs, body = _ } ->
+                    defs
+                        |> Array.foldl
+                            (\{ value = def } soFar ->
+                                when def is
+                                    Compiler.Ast.Source.Destruct destruct ->
+                                        destruct.pattern |> patternUsedVariantsFold reduceWithReference soFar
+                                    
+                                    Compiler.Ast.Source.Define define ->
+                                        define.args |> patternArrayUsedVariantsFold reduceWithReference soFar
+                            )
+                            initialState
+                
+                _ ->
+                    initialState
+            )
+
+
+patternArrayUsedVariantsFold :
+    ({ qualification : String, name : String } -> state -> state)
+    -> state
+    -> Array Compiler.Ast.Source.Pattern
+    -> state
+patternArrayUsedVariantsFold reduce initialState patterns =
+    patterns
+        |> Array.foldl
+            (\sub soFar -> sub |> patternUsedVariantsFold reduce soFar)
+            initialState
+
+
+patternUsedVariantsFold :
+    ({ qualification : String, name : String } -> state -> state)
+    -> state
+    -> Compiler.Ast.Source.Pattern
+    -> state
+patternUsedVariantsFold reduce initialState pattern =
+    pattern.value
+        |> ExtraCheck.patternImmediateSubsFold
+            (\sub soFar -> sub |> patternUsedVariantsFold reduce soFar)
+            (when pattern.value is
+                Compiler.Ast.Source.PCtor { name } ->
+                    initialState |> reduce { qualification = "", name = name.value }
+
+                Compiler.Ast.Source.PCtorQual { module_ = qualification, name } ->
+                    initialState |> reduce { qualification = qualification, name = name }
+
+                _ ->
+                    initialState
+            )
 
 
 unusedVariablesAddFromWithinExpression :
