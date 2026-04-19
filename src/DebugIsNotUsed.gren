@@ -218,7 +218,6 @@ report knowledge =
     knowledge
         |> Dict.foldl
             (\modulePath regions errorsSoFar ->
-                -- TODO optimize
                 errorsSoFar
                     |> Array.Builder.append
                         (regions.debugLogUses

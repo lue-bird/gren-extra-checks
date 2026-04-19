@@ -17,8 +17,8 @@ import Set
 import Compiler.Outline
 
 
-{-| Forbid unused type names, module-defined variables, let-defined variables, pattern variables including punned fields
-and import exposes (TODO: choice types, dependencies).
+{-| Report unused module-defined variables, ports, type aliases,
+let-defined variables, pattern variables including punned fields (TODO: choice types, dependencies).
 
 Unused imports, import aliases, import exposes and module exposes are **allowed**;
 reporting these would be more annoying than helpful.

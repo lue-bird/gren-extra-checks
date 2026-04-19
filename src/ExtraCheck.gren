@@ -40,26 +40,24 @@ For example,
 by only listing all immediate sub-parts of a piece of syntax you can choose to traverse it however you need to.
 E.g. to find all `as` pattern regions
 
-    findAllAsPatternRegions :
-        Compiler.Ast.Source.Pattern
-        -> Array SourcePosition.Region
-    findAllAsPatternRegions patternNode =
-        (when patternNode.value is
-            Compiler.Ast.Source.PAlias _ ->
-                [ patternNode.region ]
+    pushAllAsPatternRegionsInto :
+        Array.Builder.Builder SourcePosition.Region
+        -> Compiler.Ast.Source.Pattern
+        -> Array.Builder.Builder SourcePosition.Region
+    pushAllAsPatternRegionsInto builder pattern =
+        pattern.value
+            |> ExtraCheck.patternImmediateSubsFold
+                (\sub withSubsSoFar ->
+                    findAllAsPatternRegionsInto withSubsSoFar sub
+                )
+                (when pattern.value is
+                    Compiler.Ast.Source.PAlias _ ->
+                        builder |> Array.Builder.pushLast (pattern |> ExtraPath.locatedRegion)
 
-            _ ->
-                []
-        )
-            ++ (patternNode.value
-                    |> ExtraCheck.patternImmediateSubsFold
-                        (\sub withSubsSoFar ->
-                            withSubsSoFar |> Array.append (findAllAsPatternRegions sub)
-                        )
-                        []
-               )
+                    _ ->
+                        builder
+                )
 
-(In practice you should use an Array.Builder instead of Array here.)
 This fine control allows you to e.g. skip visiting certain parts that you already accounted for.
 
 @docs expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin, patternImmediateSubsFold, typeImmediateSubsFold
@@ -1543,7 +1541,7 @@ reorderErrors :
        , reviewErrors : Array FileCheckError
        }
 reorderErrors reorderState =
-    -- TODO optimize
+    -- can be optimized
     when reorderState.expectedErrors |> Array.popFirst is
         Nothing ->
             { expected =
@@ -1561,39 +1559,36 @@ reorderErrors reorderState =
             when findBestMatchingCheckError { source = reorderState.source, expected = expectedError, reviewErrorsRemaining = reorderState.reviewErrors, bestMatchError = Nothing, bestMatchConfidenceLevel = 0 } is
                 Just reviewError ->
                     reorderErrors
-                        { reorderState
-                            | pairs =
-                                Array.Builder.pushLast
-                                    { expected = expectedError, reviewError = reviewError }
-                                    reorderState.pairs
-                            , reviewErrors = arrayRemoveFirstMember reviewError reorderState.reviewErrors
-                            , expectedErrors = restOfExpectedErrors
+                        { source = reorderState.source
+                        , expectedErrorsWithNoMatch = reorderState.expectedErrorsWithNoMatch
+                        , pairs =
+                            Array.Builder.pushLast
+                                { expected = expectedError, reviewError = reviewError }
+                                reorderState.pairs
+                        , reviewErrors = arrayRemoveFirstMember reviewError reorderState.reviewErrors
+                        , expectedErrors = restOfExpectedErrors
                         }
 
                 Nothing ->
                     reorderErrors
-                        { reorderState
-                            | expectedErrorsWithNoMatch =
-                                reorderState.expectedErrorsWithNoMatch
-                                    |> Array.Builder.pushLast expectedError
-                            , expectedErrors = restOfExpectedErrors
+                        { source = reorderState.source
+                        , reviewErrors = reorderState.reviewErrors
+                        , pairs = reorderState.pairs
+                        , expectedErrorsWithNoMatch =
+                            reorderState.expectedErrorsWithNoMatch
+                                |> Array.Builder.pushLast expectedError
+                        , expectedErrors = restOfExpectedErrors
                         }
 
 
 arrayRemoveFirstMember : a -> Array a -> Array a
-arrayRemoveFirstMember elementToRemove list =
-    -- IGNORE TCO
-    -- TODO optimize by finding the index, then removing it
-    when list |> Array.popFirst is
+arrayRemoveFirstMember elementToRemove array =
+    when array |> Array.findFirst (\element -> element == elementToRemove) is
         Nothing ->
-            []
+            array
 
-        Just { first, rest = tail } ->
-            if first == elementToRemove then
-                tail
-
-            else
-                Array.pushFirst first (arrayRemoveFirstMember elementToRemove tail)
+        Just { index = foundIndex } ->
+            array |> Array.remove foundIndex
 
 
 findBestMatchingCheckError : { source : String, expected : ExpectedFileError, reviewErrorsRemaining : Array FileCheckError, bestMatchError : Maybe FileCheckError, bestMatchConfidenceLevel : Int } -> Maybe FileCheckError
@@ -1660,7 +1655,6 @@ expectErrorsMatch :
     }
     -> Expect.Expectation
 expectErrorsMatch toCheckForMatchingErrors =
-    -- IGNORE TCO
     when toCheckForMatchingErrors.expected |> Array.popFirst is
         Nothing ->
             if toCheckForMatchingErrors.reviewErrors |> Array.isEmpty then

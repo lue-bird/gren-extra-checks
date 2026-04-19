@@ -1,5 +1,3 @@
-> TODO: polish up the runner. Consider switching to gren-diff/a port of minibill's elm-diff
-
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
 It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter, faster internals.
 
