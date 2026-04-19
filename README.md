@@ -152,7 +152,7 @@ report knowledge =
 A new check can turn out to be an annoyance, sometimes in ways you didn't predict, so make sure the check solves a real problem and that everyone is on board, especially if it enforces a code style.
 If a developer disagrees with a check, they may try to circumvent it, which is not the point and not a great experience for anyone.
 
-Checks are useful when some concretely defined bad pattern must _never_ appear in the code and less useful when a pattern is _sometimes_ allowed to appear on a when-by-when basis (false positives).
+Checks are useful when some concretely defined bad pattern must _never_ appear in the code and less useful when a pattern is _sometimes_ allowed to appear on a case-by-case basis (false positives).
 With `gren-extra-checks`, there is _no way to locally ignore specific check errors_, see ["How disable comments make static analysis tools worse" by Jeroen Engels](https://jfmengels.net/disable-comments/)
 and similarly, there is no way to suppress legacy issues as lower-priority because in my opinion even these should always be visible as a (longer term) project checklist.
 
