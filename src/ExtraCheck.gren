@@ -97,7 +97,7 @@ since the behavior of a check rarely changes drastically.
 
 Make `gren-extra-checks` run in a new environment
 
-@docs Inspect, Check, run, sourceApplyEdits, SourceEditError, Run
+@docs Check, run, sourceApplyEdits, SourceEditError, Run
 
 -}
 
