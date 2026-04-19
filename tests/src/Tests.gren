@@ -37,7 +37,7 @@ tests =
                                     Debug.log is a quick and dirty way to display a value in the console
                                     and can for example be used to inspect private (opaque) types.
                                     It's nothing a published product should make use of.
-                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                     """
                               , region = ExtraCheck.ExpectUnder "Debug.log"
                               , fixedFiles = []
@@ -67,7 +67,7 @@ tests =
                                     Debug.log is a quick and dirty way to display a value in the console
                                     and can for example be used to inspect private (opaque) types.
                                     It's nothing a published product should make use of.
-                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                     """
                               , region = ExtraCheck.ExpectUnder "Debug.log"
                               , fixedFiles = []
@@ -97,7 +97,7 @@ tests =
                                     Debug.log is a quick and dirty way to display a value in the console
                                     and can for example be used to inspect private (opaque) types.
                                     It's nothing a published product should make use of.
-                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                     """
                               , region = ExtraCheck.ExpectUnder "Dbg.log"
                               , fixedFiles = []
@@ -145,7 +145,7 @@ tests =
                                     Debug.log is a quick and dirty way to display a value in the console
                                     and can for example be used to inspect private (opaque) types.
                                     It's nothing a published product should make use of.
-                                    Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                    `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                     """
                               , region =
                                     ExtraCheck.ExpectUnderExactly
