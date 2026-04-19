@@ -6,18 +6,16 @@ To use it for your project, make a directory `extra-checks` and initialize it wi
 module Main exposing (main)
 
 import ExtraChecksRunnerNode
-import SomeConvention
 
 main =
     ExtraChecksRunnerNode.program
         { extraPaths = [ "README.md" ]
         , checks =
-            [ SomeConvention.check SomeConvention.someConfiguration
-            -- , ...
+            [ -- add your checks here (and don't forget to import them)
             ]
         }
 ```
-Here you can add new checks from local code or `gren package install` to the `checks` list,
+Here you can add new checks from this package (like [`DebugIsNotUsed.check`](DebugIsNotUsed#check)), local code or `gren package install` to the `checks` list,
 see also ["when to add an extra check"](#when-to-add-an-extra-check).
 
 The `extra-checks/` gren project should now look like the `extra-checks/` directory in this repository.

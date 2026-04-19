@@ -11,6 +11,6 @@ main =
     ExtraChecksRunnerNode.program
         { extraPaths = [ "README.md" ]
         , checks =
-            [ -- add your checks here
+            [ -- add your checks here (and don't forget to import them)
             ]
         }
