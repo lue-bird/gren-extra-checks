@@ -254,7 +254,7 @@ parseCompilerPackage package =
     , modules =
         package.sources
             |> Dict.foldl
-                (\path source soFar ->
+                (\_ source soFar ->
                     when source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
                         Err _ ->
                             -- should largely not happen in practice
@@ -551,9 +551,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
 
                                                 Just nextFixableErrorOrAllUnfixable ->
                                                     errorsReceived
-                                                        { fileSystemPermission = fileSystemPermission
-                                                        , stdout = environment.stdout
-                                                        }
+                                                        { stdout = environment.stdout }
                                                         { projectFilesByPath =
                                                             initialFilesByPath
                                                                 |> Dict.set "gren.json" initialInfo.grenJson.source
@@ -793,9 +791,7 @@ update config event stateOrExited =
 
                                                                 Just nextFixableErrorOrAllUnfixable ->
                                                                     errorsReceived
-                                                                        { fileSystemPermission = state.fileSystemPermission
-                                                                        , stdout = state.environment.stdout
-                                                                        }
+                                                                        { stdout = state.environment.stdout }
                                                                         { projectFilesByPath =
                                                                             state.filesByPath
                                                                                 |> Dict.set "gren.json" state.grenJson.source
@@ -947,9 +943,7 @@ update config event stateOrExited =
 
                                             Just nextFixableErrorOrAllUnfixable ->
                                                 errorsReceived
-                                                    { fileSystemPermission = state.fileSystemPermission
-                                                    , stdout = state.environment.stdout
-                                                    }
+                                                    { stdout = state.environment.stdout }
                                                     { projectFilesByPath =
                                                         filesByPathWithAddedOrChanged
                                                             |> Dict.set "gren.json" state.grenJson.source
@@ -1014,9 +1008,7 @@ update config event stateOrExited =
 
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
-                                    { fileSystemPermission = state.fileSystemPermission
-                                    , stdout = state.environment.stdout
-                                    }
+                                    { stdout = state.environment.stdout }
                                     { projectFilesByPath =
                                         filesByPathWithRemoved
                                             |> Dict.set "gren.json" state.grenJson.source
@@ -1144,9 +1136,7 @@ update config event stateOrExited =
 
                                     Just nextFixableErrorOrAllUnfixable ->
                                         errorsReceived
-                                            { fileSystemPermission = state.fileSystemPermission
-                                            , stdout = state.environment.stdout
-                                            }
+                                            { stdout = state.environment.stdout }
                                             { projectFilesByPath =
                                                 filesByPathWithAddedOrChanged
                                                     |> Dict.set "gren.json" state.grenJson.source
@@ -1211,9 +1201,7 @@ update config event stateOrExited =
 
                             Just nextFixableErrorOrAllUnfixable ->
                                 errorsReceived
-                                    { fileSystemPermission = state.fileSystemPermission
-                                    , stdout = state.environment.stdout
-                                    }
+                                    { stdout = state.environment.stdout }
                                     { projectFilesByPath =
                                         filesByPathWithRemoved
                                             |> Dict.set "gren.json" state.grenJson.source
@@ -1276,15 +1264,13 @@ checkErrorsToString ansiConfig projectFilesByPath checkErrors =
 
 
 errorsReceived :
-    { fileSystemPermission : FileSystem.Permission
-    , stdout : Stream.Writable Bytes.Bytes
-    }
+    { stdout : Stream.Writable Bytes.Bytes }
     ->
         { projectFilesByPath : Dict String String
         , errors : NextFixableOrAllUnfixable
         }
     -> Task.Task x {}
-errorsReceived { fileSystemPermission, stdout } { projectFilesByPath, errors } =
+errorsReceived { stdout } { projectFilesByPath, errors } =
     when errors is
         AllUnfixable unfixableErrors ->
             Stream.Log.string stdout
@@ -1428,7 +1414,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
         sourceAtPath path =
             when path is
                 "gren.json" ->
-                    project.grenJsonSource |> Just
+                    Just project.grenJsonSource
 
                 filePath ->
                     project.filesByPath |> Dict.get filePath
@@ -1449,113 +1435,125 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
             errorsByPath
                 |> Dict.foldl
                     (\path errors soFar ->
-                        let
-                            errorsFixableErrorOrAll :
-                                { fixable :
-                                    Maybe
-                                        { source : String
-                                        , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
-                                        , message : String
-                                        , details : String
-                                        , region : SourcePosition.Region
-                                        , path : String
-                                        }
-                                , otherErrors : Array FileReviewError
-                                }
-                            errorsFixableErrorOrAll =
-                                when soFar.fixable is
-                                    Just soFarFix ->
-                                        { fixable = soFarFix |> Just, otherErrors = errors }
+                        when soFar.fixable is
+                            Just _ as soFarFix ->
+                                if errors |> Array.isEmpty then
+                                    soFar
+                                
+                                else
+                                    { fixable = soFarFix
+                                    , otherErrors = soFar.otherErrors |> Dict.set path errors
+                                    }
 
+                            Nothing ->
+                                when sourceAtPath path is
                                     Nothing ->
-                                        when sourceAtPath path is
-                                            Nothing ->
-                                                { fixable = Nothing, otherErrors = [] }
+                                        soFar
 
-                                            Just pathSource ->
-                                                errors
-                                                    |> Array.foldl
-                                                        (\error errorsResultSoFar ->
-                                                            let
-                                                                fixedSources : Array { path : String, fixedSource : String, originalSource : String }
-                                                                fixedSources =
-                                                                    error.fixEditsByPath
-                                                                        |> Dict.foldl
-                                                                            (\fixPath fileEdits soFarFixedSources ->
-                                                                                when sourceAtPath fixPath is
-                                                                                    Nothing ->
-                                                                                        soFarFixedSources
-
-                                                                                    Just sourceToFix ->
-                                                                                        when sourceToFix |> ExtraCheck.sourceApplyEdits fileEdits is
-                                                                                            Ok fixedSource ->
-                                                                                                soFarFixedSources
-                                                                                                    |> Array.Builder.pushLast
-                                                                                                        { path = fixPath
-                                                                                                        , fixedSource = fixedSource
-                                                                                                        , originalSource = sourceToFix
-                                                                                                        }
-
-                                                                                            Err _ ->
-                                                                                                soFarFixedSources
-                                                                            )
-                                                                            (Array.Builder.empty 0)
-                                                                        |> Array.Builder.toArray
-                                                            in
-                                                            if fixedSources |> Array.isEmpty then
-                                                                { fixable = Nothing
-                                                                , otherErrors = errorsResultSoFar.otherErrors |> Array.Builder.pushLast error
-                                                                }
-
-                                                            else
-                                                                { fixable =
-                                                                    { source = pathSource
-                                                                    , fixedSources = fixedSources
-                                                                    , message = error.message
-                                                                    , details = error.details
-                                                                    , region = error.region
-                                                                    , path = path
-                                                                    }
-                                                                        |> Just
-                                                                , otherErrors = errorsResultSoFar.otherErrors
-                                                                }
-                                                        )
-                                                        { fixable = Nothing
-                                                        , otherErrors = Array.Builder.empty 0
+                                    Just pathSource ->
+                                        let
+                                            maybeFixable :
+                                                Maybe
+                                                    { index : Int
+                                                    , info :
+                                                        { source : String
+                                                        , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                                                        , message : String
+                                                        , details : String
+                                                        , region : SourcePosition.Region
+                                                        , path : String
                                                         }
-                                                    |> (\result ->
-                                                            { fixable = result.fixable
-                                                            , otherErrors = result.otherErrors |> Array.Builder.toArray 
-                                                            }
-                                                       )
-                        in
-                        { fixable = errorsFixableErrorOrAll.fixable
-                        , otherErrors = soFar.otherErrors |> Dict.set path errorsFixableErrorOrAll.otherErrors
-                        }
+                                                    }
+                                            maybeFixable =
+                                                errors
+                                                    |> Array.indexedFoldl
+                                                        (\errorIndex error fixableSoFar ->
+                                                            when fixableSoFar is
+                                                                Just _ as justFixableSoFar ->
+                                                                    justFixableSoFar
+
+                                                                Nothing ->
+                                                                    let
+                                                                        fixedSources : Array { path : String, fixedSource : String, originalSource : String }
+                                                                        fixedSources =
+                                                                            error.fixEditsByPath
+                                                                                |> Dict.foldl
+                                                                                    (\fixPath fileEdits soFarFixedSources ->
+                                                                                        when sourceAtPath fixPath is
+                                                                                            Nothing ->
+                                                                                                soFarFixedSources
+
+                                                                                            Just sourceToFix ->
+                                                                                                when sourceToFix |> ExtraCheck.sourceApplyEdits fileEdits is
+                                                                                                    Err _ ->
+                                                                                                        soFarFixedSources
+
+                                                                                                    Ok fixedSource ->
+                                                                                                        soFarFixedSources
+                                                                                                            |> Array.Builder.pushLast
+                                                                                                                { path = fixPath
+                                                                                                                , fixedSource = fixedSource
+                                                                                                                , originalSource = sourceToFix
+                                                                                                                }
+                                                                                    )
+                                                                                    (Array.Builder.empty 0)
+                                                                                |> Array.Builder.toArray
+                                                                    in
+                                                                    if fixedSources |> Array.isEmpty then
+                                                                        Nothing
+
+                                                                    else
+                                                                        Just
+                                                                            { index = errorIndex
+                                                                            , info =
+                                                                                { source = pathSource
+                                                                                , fixedSources = fixedSources
+                                                                                , message = error.message
+                                                                                , details = error.details
+                                                                                , region = error.region
+                                                                                , path = path
+                                                                                }
+                                                                            }
+                                                        )
+                                                        Nothing
+                                        in
+                                        when maybeFixable is
+                                            Nothing ->
+                                                { fixable = Nothing
+                                                , otherErrors =
+                                                    if errors |> Array.isEmpty then
+                                                        soFar.otherErrors
+                                                    
+                                                    else
+                                                        soFar.otherErrors |> Dict.set path errors
+                                                }
+                                            
+                                            Just fixable ->
+                                                { fixable = Just fixable.info
+                                                , otherErrors =
+                                                    if (errors |> Array.length) <= 1 then
+                                                        soFar.otherErrors
+                                                    
+                                                    else
+                                                        soFar.otherErrors
+                                                            |> Dict.set path (errors |> Array.remove fixable.index)
+                                                }
                     )
                     { fixable = Nothing
                     , otherErrors = Dict.empty
                     }
-
-        otherErrorsByPath : Dict String (Array FileReviewError)
-        otherErrorsByPath =
-            nextFixableErrorOrAll.otherErrors
-                |> Dict.keepIf
-                    (\_ errors ->
-                        Basics.not (Array.isEmpty errors)
-                    )
     in
     when nextFixableErrorOrAll.fixable is
         Just fixable ->
-            Fixable { fixable = fixable, otherErrors = otherErrorsByPath }
+            Fixable { fixable = fixable, otherErrors = nextFixableErrorOrAll.otherErrors }
                 |> Just
 
         Nothing ->
-            if otherErrorsByPath |> Dict.isEmpty then
+            if nextFixableErrorOrAll.otherErrors |> Dict.isEmpty then
                 Nothing
 
             else
-                AllUnfixable otherErrorsByPath |> Just
+                AllUnfixable (nextFixableErrorOrAll.otherErrors) |> Just
 
 
 allModuleFilesToWithParsedSyntax :
