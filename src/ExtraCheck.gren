@@ -7,6 +7,7 @@ module ExtraCheck exposing
     , patternVariablesFold, patternArrayVariablesFold
     , locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
     , outlineExposedModuleNameSet
+    , implicitImports
     , expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
     )
@@ -65,6 +66,7 @@ This fine control allows you to e.g. skip visiting certain parts that you alread
 @docs patternVariablesFold, patternArrayVariablesFold
 @docs locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
 @docs outlineExposedModuleNameSet
+@docs implicitImports
 
 Suggestions to add, remove or change helpers welcome!
 sourceRegionsOf
@@ -775,54 +777,6 @@ implicitImports =
     |> Dict.set "Platform.Sub" { alias = Just "Sub", exposes = Set.singleton "Sub" }
 
 
-mergeInImport :
-    { moduleName : String
-    , alias : Maybe String
-    , exposes : Set String
-    }
-    ->
-        (Dict
-            String
-            { alias : Maybe String
-            , -- includes names of variants
-              exposes : Set String
-            }
-         ->
-            Dict
-                String
-                { alias : Maybe String
-                , -- includes names of variants
-                  exposes : Set String
-                }
-        )
-mergeInImport importInfoToAdd imports =
-    Dict.update importInfoToAdd.moduleName
-        (\existingImport ->
-            let
-                newImportInfo : { alias : Maybe String, exposes : Set String }
-                newImportInfo =
-                    when existingImport is
-                        Nothing ->
-                            { alias = importInfoToAdd.alias
-                            , exposes = importInfoToAdd.exposes
-                            }
-
-                        Just import_ ->
-                            { alias =
-                                when import_.alias is
-                                    Just alias ->
-                                        alias |> Just
-
-                                    Nothing ->
-                                        importInfoToAdd.alias
-                            , exposes = Set.union import_.exposes importInfoToAdd.exposes
-                            }
-            in
-            Just newImportInfo
-        )
-        imports
-
-
 {-| A single edit to be applied to a file's source
 in order to fix a [check error](#Error)
 -}
@@ -1376,47 +1330,6 @@ moduleAndCommentsParser =
         |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
 
-parseDependencyModules :
-    Array { path : String, source : String }
-    ->
-        Result
-            (Array.Builder.Builder String)
-            (Array.Builder.Builder { source : String, syntax : Compiler.Ast.Source.Module })
-parseDependencyModules moduleFiles =
-    moduleFiles
-        |> Array.foldl
-            (\moduleUnparsed soFar ->
-                when moduleUnparsed.source |> String.Parser.Advanced.run Compiler.Parse.Module.parser Compiler.Parse.Context.empty is
-                    Err _ ->
-                        Err
-                            (Array.Builder.pushLast
-                                (moduleFailedToParse { path = moduleUnparsed.path })
-                                (when soFar is
-                                    Ok _ ->
-                                        Array.Builder.empty 1
-
-                                    Err failedToParseSoFar ->
-                                        failedToParseSoFar
-                                )
-                            )
-
-                    Ok syntax ->
-                        when soFar is
-                            Ok parsedSoFar ->
-                                Ok
-                                    (parsedSoFar
-                                        |> Array.Builder.pushLast
-                                            { source = moduleUnparsed.source
-                                            , syntax = syntax
-                                            }
-                                    )
-
-                            (Err _) as failedToParseSoFar ->
-                                failedToParseSoFar
-            )
-            (Ok (Array.Builder.empty 2))
-
-
 moduleFailedToParse : { path : String } -> String
 moduleFailedToParse file =
     failureMessage "module failed to parse"
@@ -1424,26 +1337,6 @@ moduleFailedToParse file =
             ++ file.path
             ++ ".\n\n"
             ++ "Hint: Maybe you forgot to add the module definition at the top, like module A exposing (a)"
-        )
-
-
-dependencyGrenJsonParsingFailure : Json.Decode.Error -> String
-dependencyGrenJsonParsingFailure jsonDecodeError =
-    failureMessage "dependency gren.json failed to parse"
-        ("I could not parse a provided dependency gren.json source: "
-            ++ (jsonDecodeError |> Json.Decode.errorToString)
-            ++ "\n\n"
-            ++ "Hint: Maybe you copy pasted the wrong file?"
-        )
-
-
-dependencyDocsJsonParsingFailure : Json.Decode.Error -> String
-dependencyDocsJsonParsingFailure jsonDecodeError =
-    failureMessage "dependency docs.json failed to parse"
-        ("I could not parse a provided dependency docs.json source: "
-            ++ (jsonDecodeError |> Json.Decode.errorToString)
-            ++ "\n\n"
-            ++ "Hint: Maybe you copy pasted the wrong file?"
         )
 
 

@@ -208,18 +208,6 @@ referenceIsImportedFrom importOfTheModuleToCheckFor reference =
            )
 
 
-stringToReference : String -> { qualification : String, name : String }
-stringToReference referenceString =
-    when referenceString |> String.lastIndexOf "." is
-        Nothing ->
-            { qualification = "", name = referenceString }
-
-        Just lastDotIndex ->
-            { qualification = referenceString |> String.takeFirst lastDotIndex
-            , name = referenceString |> String.dropFirst (lastDotIndex + 1)
-            }
-
-
 knowledgeMerge : Knowledge -> Knowledge -> Knowledge
 knowledgeMerge a b =
     Dict.union a b
