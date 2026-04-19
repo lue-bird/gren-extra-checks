@@ -1,8 +1,7 @@
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
 It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter, faster internals.
 
-To use it for your project, copy this repository's `extra-checks` directory into your project.
-`extra-checks/` is a regular gren application where you can add new checks from local code or `gren package install` to the `checks` list in `src/Main.gren`:
+To use it for your project, make a directory `extra-checks` and initialize it with `gren init --platform=node`, followed by `gren package install lue-bird/gren-extra-checks` and adding a `src/Main.gren`:
 ```gren
 module Main exposing (main)
 
@@ -18,7 +17,10 @@ main =
             ]
         }
 ```
+Here you can add new checks from local code or `gren package install` to the `checks` list,
 see also ["when to add an extra check"](#when-to-add-an-extra-check).
+
+The `extra-checks/` gren project should now look like the `extra-checks/` directory in this repository.
 
 An example of [creating a custom check](ExtraCheck#create) to fix a typo in a string that was made too often:
 ```gren
