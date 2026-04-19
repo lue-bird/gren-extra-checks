@@ -15,10 +15,12 @@ import Array.Builder
 import Compiler.Parse.Context
 import Set
 import Compiler.Outline
+import Compiler.PackageName
+import Compiler.ModuleName
 
 
 {-| Report unused module-defined variables, ports, type aliases,
-let-defined variables, pattern variables including punned fields (TODO: choice types, dependencies).
+let-defined variables, pattern variables including punned fields and dependencies.
 
 Unused imports, import aliases, import exposes and module exposes are **allowed**;
 reporting these would be more annoying than helpful.
@@ -36,15 +38,15 @@ reporting these would be more annoying than helpful.
 
 ### potential future improvements
 
-  - report unused variants.
+  - report unused choice types and variants.
     While possible, it would have false negatives (e.g. when constructing a variant for equality checking)
     and impossible to fix as deciding which cases to remove from a `when is`
     often requires exhaustiveness analysis.
-  - report unused fields. This requires type inference
+  - report unused fields. This may require type inference or similar
   - unused function parameters. When a function ignores an incoming value, remove the corresponding argument in all call sites.
     Fixing this is non-trivial and the check is probably more controversial compared to the remaining unused checking
-  - report phantom type parameters. Also probably too controversial, can be a separate rule
-  - report unused parameters across (mutual) recursion. This is tricky! Help appreciated
+  - report phantom type parameters. Also probably too controversial, can be a separate check
+  - report unused parameters across (mutual) recursion (in module- and let-defined variables). This is tricky! Help appreciated
 
 -}
 check : ExtraCheck.Check
@@ -53,7 +55,7 @@ check =
         { inspectModule = inspectModule
         , inspectGrenJson = inspectGrenJson
         , inspectExtraFile = \_ -> knowledgeNone
-        , inspectDirectDependencies = \_ -> knowledgeNone
+        , inspectDirectDependencies = inspectDirectDependencies
         , knowledgeMerge = knowledgeMerge
         , report = report
         }
@@ -63,7 +65,10 @@ check =
 they are allowed to overlap
 -}
 type alias Knowledge =
-    { exposedModules : Set.Set String
+    { grenJsonSource : Maybe String
+    , directDependencyExposedModules :
+        Dict.Dict String (Array Compiler.ModuleName.ModuleName)
+    , exposedModules : Set.Set String
     , moduleInfos :
         Dict.Dict
             -- module name
@@ -123,7 +128,9 @@ type alias Knowledge =
 
 knowledgeNone : Knowledge
 knowledgeNone =
-    { exposedModules = Set.empty
+    { grenJsonSource = Nothing
+    , directDependencyExposedModules = Dict.empty
+    , exposedModules = Set.empty
     , moduleInfos = Dict.empty
     , usedTypeNames = Dict.empty
     , usedVariableNames = Dict.empty
@@ -133,7 +140,17 @@ knowledgeNone =
 
 knowledgeMerge : Knowledge -> Knowledge -> Knowledge
 knowledgeMerge a b =
-    { exposedModules =
+    { grenJsonSource =
+        when a.grenJsonSource is
+            Nothing ->
+                b.grenJsonSource
+            
+            Just _ as justGrenJsonSource ->
+                justGrenJsonSource
+    , directDependencyExposedModules =
+        a.directDependencyExposedModules
+            |> Dict.union b.directDependencyExposedModules
+    , exposedModules =
         a.exposedModules |> Set.union b.exposedModules
     , moduleInfos =
         a.moduleInfos |> Dict.union b.moduleInfos
@@ -151,16 +168,42 @@ knowledgeMerge a b =
 
 inspectGrenJson : { source : String, outline : Compiler.Outline.Outline } -> Knowledge
 inspectGrenJson grenJson =
-    when grenJson.outline is
-        Compiler.Outline.App _ ->
-            knowledgeNone
+        { knowledgeNone
+        | grenJsonSource = Just grenJson.source
+        , exposedModules =
+            when grenJson.outline is
+                Compiler.Outline.App _ ->
+                    Set.empty
 
-        Compiler.Outline.Pkg packageOutline ->
-            { knowledgeNone
-                | exposedModules =
+                Compiler.Outline.Pkg packageOutline ->
                     packageOutline.exposedModules
                         |>  ExtraCheck.outlineExposedModuleNameSet
-            }
+        }
+
+
+inspectDirectDependencies :
+    Array
+        { outline : Compiler.Outline.PkgOutline
+        , modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
+        }
+    -> Knowledge
+inspectDirectDependencies directDependencies =
+    { knowledgeNone
+    | directDependencyExposedModules =
+        directDependencies
+            |> Array.foldl
+                (\directDependency soFar ->
+                    soFar
+                        |> Dict.set
+                            (directDependency.outline.name
+                                |> Compiler.PackageName.toString
+                            )
+                            (directDependency.outline.exposedModules
+                                |> ExtraCheck.outlineExposedModuleNames
+                            )
+                )
+                Dict.empty
+    }
 
 
 inspectModule :
@@ -272,7 +315,6 @@ inspectModule module_ =
                                 }
                     )
                     Dict.empty
-                    -- TODO
                     -- (module_.syntax.unions
                     --     |> Array.foldl
                     --         (\choiceType soFar ->
@@ -464,7 +506,9 @@ inspectModule module_ =
                                 typeNames
                    )
     in
-    { exposedModules = Set.empty
+    { grenJsonSource = Nothing
+    , directDependencyExposedModules = Dict.empty
+    , exposedModules = Set.empty
     , moduleInfos =
         Dict.singleton module_.syntax.name.value
             { path = module_.path
@@ -607,8 +651,75 @@ report knowledge =
                                         )
                             )
                    )
+        
+        directDependencyModuleNameIsUsed : Compiler.ModuleName.ModuleName -> Bool
+        directDependencyModuleNameIsUsed directDependencyModuleName =
+            let
+                moduleName : String
+                moduleName =
+                    directDependencyModuleName |> Compiler.ModuleName.toString
+            in
+            (knowledge.usedVariableNames |> Dict.member moduleName)
+                || (knowledge.usedTypeNames |> Dict.member moduleName)
+                || (knowledge.modulesImportingExposingAll
+                        |> Dict.any
+                            (\_ moduleImportingExposingAll ->
+                                -- technically this can lead to false positives
+                                -- as a module could be imported exposing (..)
+                                -- but have no referenced member.
+                                moduleImportingExposingAll.importedModulesExposingAll
+                                    |> Set.member moduleName
+                            )
+                   )
     in
     Array.Builder.empty 0
+        |> asInitForDictFoldlOver knowledge.directDependencyExposedModules
+            (\packageName directDependencyExposedModules soFar ->
+                if
+                    (packageName == "gren-lang/core")
+                        || (directDependencyExposedModules
+                                |> Array.any directDependencyModuleNameIsUsed
+                           )
+                then
+                    soFar
+                
+                else
+                    soFar
+                        |> Array.Builder.pushLast
+                            { path = ExtraCheck.grenJsonPath
+                            , message = "unused direct dependency " ++ packageName
+                            , region =
+                                knowledge.grenJsonSource
+                                    |> Maybe.andThen
+                                        (\grenJsonSource ->
+                                            grenJsonSource
+                                                |> String.firstIndexOf packageName
+                                                |> Maybe.map
+                                                    (\packageNameSourceIndex ->
+                                                        let
+                                                            start : SourcePosition.Position
+                                                            start =
+                                                                packageNameSourceIndex
+                                                                    |> ExtraCheck.sourceUnitIndexToPosition grenJsonSource
+                                                        in
+                                                        { start = start
+                                                        , end = { row = start.row, col = start.col + (packageName |> String.unitLength) }
+                                                        }
+                                                    )
+                                        )
+                                    |> Maybe.withDefaultLazy
+                                        (\{} ->
+                                            { start = { row = 1, col = 1 }
+                                            , end = { row = 1, col = 2 }
+                                            }
+                                        )
+                            , details =
+                                "No module exposed from this package is referenced (outside of imports). Use it or uninstall it with gren package uninstall "
+                                    ++ packageName
+                                    ++ " along with removing potential remaining imports."
+                            , fix = []
+                            }
+            )
         |> asInitForDictFoldlOver knowledge.moduleInfos
             (\originModuleName moduleInfo soFarAcrossModules ->
                 soFarAcrossModules
@@ -669,7 +780,7 @@ report knowledge =
                         )
                     |> asInitForDictFoldlOver moduleInfo.types
                         (\typeName typeNameOrigin soFar ->
-                            -- TODO if origin is choice type || any of its variants is used
+                            -- if origin is choice type || any of its variants is used
                             if ({ moduleOrigin = originModuleName, name = typeName } |> typeNameIsUsed moduleInfo.exposing_) then
                                 soFar
 
