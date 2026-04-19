@@ -1595,20 +1595,21 @@ allModuleFilesToWithParsedSyntax moduleFiles =
 
                     Ok { comments, syntax } ->
                         when soFar is
-                            Err soFarErrorPaths ->
-                                Err soFarErrorPaths
+                            Err _ as soFarErrorPaths ->
+                                soFarErrorPaths
 
                             Ok soFarWithParsedSyntax ->
-                                soFarWithParsedSyntax
-                                    |> Array.Builder.pushLast
-                                        { path = moduleFile.path
-                                        , source = moduleFile.source
-                                        , comments = comments
-                                        , syntax = syntax
-                                        }
-                                    |> Ok
+                                Ok
+                                    (soFarWithParsedSyntax
+                                        |> Array.Builder.pushLast
+                                            { path = moduleFile.path
+                                            , source = moduleFile.source
+                                            , comments = comments
+                                            , syntax = syntax
+                                            }
+                                    )
             )
-            (Array.Builder.empty 2 |> Ok)
+            (Ok (Array.Builder.empty 2))
             |> Result.mapError Array.Builder.toArray
             |> Result.map Array.Builder.toArray
 
