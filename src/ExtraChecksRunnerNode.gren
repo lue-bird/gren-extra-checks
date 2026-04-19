@@ -1662,24 +1662,32 @@ errorDisplay ({ ansi } as ansiConfig) source error =
            )
         ++ "\n\n"
         ++ error.details
-        ++ (if error.fixedSources |> Array.isEmpty then
-                ""
+        ++ (when error.fixedSources is
+                [] ->
+                    ""
+                
+                [ fileFixedSource ] ->
+                    "\n\nI can fix this for you by changing "
+                        ++ fileFixedSource.path
+                        ++ "\n"
+                        ++ sourceHighlightDifferentLines ansiConfig
+                            fileFixedSource.originalSource
+                            fileFixedSource.fixedSource
 
-            else
-                -- TODO special case single-path fixes for clearer wording and formatting
-                "\n\nI can fix this for you by changing\n"
-                    ++ (error.fixedSources
-                            |> Array.map
-                                (\fileFixedSource ->
-                                    "in "
-                                        ++ fileFixedSource.path
-                                        ++ "\n"
-                                        ++ sourceHighlightDifferentLines ansiConfig
-                                            fileFixedSource.originalSource
-                                            fileFixedSource.fixedSource
-                                )
-                            |> String.join "\n\n"
-                        )
+                _ ->
+                    "\n\nI can fix this for you by changing\n"
+                        ++ (error.fixedSources
+                                |> Array.map
+                                    (\fileFixedSource ->
+                                        "in "
+                                            ++ fileFixedSource.path
+                                            ++ "\n"
+                                            ++ sourceHighlightDifferentLines ansiConfig
+                                                fileFixedSource.originalSource
+                                                fileFixedSource.fixedSource
+                                    )
+                                |> String.join "\n\n"
+                            )
            )
 
 
