@@ -3,7 +3,7 @@ module ExtraChecksRunnerNode exposing
     , ProgramEvent(..), ProgramState
     )
 
-{-|
+{-| Run checks in the command line.
 
 @docs program, Program, initWith, update, subscriptions, ProgramEvent, ProgramState
 

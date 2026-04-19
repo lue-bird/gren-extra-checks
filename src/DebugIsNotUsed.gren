@@ -1,6 +1,6 @@
 module DebugIsNotUsed exposing (check)
 
-{-|
+{-| Report `Debug` usage.
 
 @docs check
 

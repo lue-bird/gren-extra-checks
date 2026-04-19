@@ -1,6 +1,6 @@
 module IntroducedNameIsUsed exposing (check)
 
-{-|
+{-| Report unused declared names.
 
 @docs check
 
