@@ -6,7 +6,7 @@ module ExtraCheck exposing
     , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin(..), patternImmediateSubsFold, typeImmediateSubsFold
     , patternVariablesFold, patternArrayVariablesFold
     , locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
-    , outlineExposedModuleNameSet
+    , outlineExposedModuleNameSet, outlineExposedModuleNames
     , implicitImports
     , expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion(..)
     , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
@@ -63,7 +63,7 @@ This fine control allows you to e.g. skip visiting certain parts that you alread
 @docs expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin, patternImmediateSubsFold, typeImmediateSubsFold
 @docs patternVariablesFold, patternArrayVariablesFold
 @docs locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
-@docs outlineExposedModuleNameSet
+@docs outlineExposedModuleNameSet, outlineExposedModuleNames
 @docs implicitImports
 
 Suggestions to add, remove or change helpers welcome!
@@ -668,7 +668,34 @@ sourceUnitIndexToPosition source sourceOffset =
     }
 
 
-{-| The set of modules in the `exposed-modules` field in a package gren.json
+{-| The module names listed in the `exposed-modules` field in a package gren.json.
+If you need a set, use [`outlineExposedModuleNameSet`](#outlineExposedModuleNameSet)
+-}
+outlineExposedModuleNames : Compiler.Outline.Exposed -> Array Compiler.ModuleName.ModuleName
+outlineExposedModuleNames exposed =
+    when exposed is 
+        Compiler.Outline.ExposedArray array ->
+            array
+
+        Compiler.Outline.ExposedDict dict ->
+            dict
+                |> Dict.foldl
+                    (\_ moduleNames soFar ->
+                        moduleNames
+                            |> Array.foldl
+                                (\moduleName withModuleNamesSoFar ->
+                                    withModuleNamesSoFar
+                                        |> Array.Builder.pushLast moduleName
+                                )
+                                soFar
+                    )
+                    (Array.Builder.empty 1)
+                |> Array.Builder.toArray
+
+
+{-| The set of modules in the `exposed-modules` field in a package gren.json.
+Only use this helper if you need a set,
+otherwise prefer [`outlineExposedModuleNames`](#outlineExposedModuleNames) which produces an array and is faster.
 -}
 outlineExposedModuleNameSet : Compiler.Outline.Exposed -> Set String
 outlineExposedModuleNameSet exposed =
