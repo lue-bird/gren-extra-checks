@@ -25,7 +25,7 @@ import Compiler.Parse.Context
   - `Debug.toString` is a quick and dirty way to display a value anywhere,
     similar to `Debug.log`
 
-Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+`Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
 
 
 ### reported
@@ -230,7 +230,7 @@ report knowledge =
                                         Debug.log is a quick and dirty way to display a value in the console
                                         and can for example be used to inspect private (opaque) types.
                                         It's nothing a published product should make use of.
-                                        Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                        `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                         """
                                     , region = debugLogUse
                                     , fix =
@@ -251,7 +251,7 @@ report knowledge =
                                         Debug.toString is a quick and dirty way to display a value somewhere
                                         and can for example be used to inspect private (opaque) types.
                                         It's nothing a published product should make use of.
-                                        Using any `Debug` member also prevents compiling in optimized mode and publishing as a package.
+                                        `Debug` members also can't be compiled in optimized mode and prevent publishing as a package.
                                         """
                                     , region = debugToStringUse
                                     , fix = []
