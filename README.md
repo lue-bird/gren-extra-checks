@@ -20,7 +20,7 @@ main =
             ]
         }
 ```
-Here you can add new checks from this package (like [`DebugIsNotUsed.check`](https://packages.gren-lang.org/package/lue-bird/gren-extra-checks/version/1.0.3/module/DebugIsNotUsed#check)), local code or `gren package install` to the `checks` list,
+Here you can add new checks from this package (like [`DebugIsNotUsed.check`](https://packages.gren-lang.org/package/lue-bird/gren-extra-checks/version/1.1.0/module/DebugIsNotUsed#check)), local code or `gren package install` to the `checks` list,
 see also ["when to add an extra check"](#when-to-add-an-extra-check).
 
 The `extra-checks/` gren project should now look like the `extra-checks/` directory in this [repository](https://github.com/lue-bird/gren-extra-checks).
