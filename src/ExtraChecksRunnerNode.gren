@@ -1,18 +1,20 @@
 module ExtraChecksRunnerNode exposing
-    ( program, Program, initWith, update, subscriptions
-    , ProgramEvent(..), ProgramState
+    ( program, Program, initWith, update, subscriptions, ProgramEvent(..), ProgramState
+    , main
     )
 
 {-| Run checks in the command line.
 
 @docs program, Program, initWith, update, subscriptions, ProgramEvent, ProgramState
 
+## _only for trying it out_
+
+@docs main
+
 -}
 
-import Array exposing (Array)
 import Dict exposing (Dict)
 import Json.Decode
-import Json.Encode
 import ExtraCheck
 import Node
 import SourcePosition
@@ -44,6 +46,9 @@ import Bytes
 import Stream.Log
 import Terminal
 import Bytes.Encode
+import IntroducedNameIsUsed
+import DebugIsNotUsed
+import DocumentationDoesNotContainTodo
 
 
 {-| A node program produced by [`ExtraChecksRunnerNode.program`](#Program)
@@ -102,6 +107,42 @@ type ProgramEvent
     | Typed (Result Stream.Error Bytes.Bytes)
 
 
+{-| **only for trying out**.
+
+Gren supports running programs from anywhere using --project,
+so you can run
+```bash
+gren run --project=lue-bird/gren-extra-checks ExtraChecksRunnerNode
+```
+to test this out with the checks exposed from this package
+before deciding to add a full-fledged project configuration.
+
+Equivalent to having
+
+    ExtraChecksRunnerNode.program
+        { extraPaths = [ "README.md" ]
+        , checks =
+            [ IntroducedNameIsUsed.check
+            , DebugIsNotUsed.check
+            , DocumentationDoesNotContainTodo.check [ "TODO" ]
+            ]
+        }
+
+in an extra-checks/ subdirectory and calling `gren run` on it
+
+-}
+main : Program
+main =
+    programAnalyzingProjectAt FileSystem.Path.empty
+        { extraPaths = [ "README.md" ]
+        , checks =
+            [ IntroducedNameIsUsed.check
+            , DebugIsNotUsed.check
+            , DocumentationDoesNotContainTodo.check [ "TODO" ]
+            ]
+        }
+
+
 {-| Fully assembled command line program to run checks, re-running on file changes.
 Use from a node gren project as the `main`.
 Be aware that if you change the gren.json/dependencies of the project to check
@@ -144,6 +185,19 @@ program :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
     -> Program
 program config =
+    programAnalyzingProjectAt projectToAnalyzeParentPath config
+
+
+projectToAnalyzeParentPath : FileSystem.Path.Path
+projectToAnalyzeParentPath =
+    FileSystem.Path.fromPosixString ".."
+
+
+programAnalyzingProjectAt :
+    FileSystem.Path.Path
+    -> { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> Program
+programAnalyzingProjectAt projectToAnalyzePath config =
     Node.defineProgram
         { init =
             \environment ->
@@ -152,7 +206,8 @@ program config =
                         Init.await FileSystem.initialize
                             (\fileSystemPermission ->
                                 Init.awaitTask
-                                    (initWith config
+                                    (initWithAnalyzingProjectAt projectToAnalyzePath
+                                        config
                                         { environment = environment
                                         , terminalConfiguration = maybeTerminalConfiguration
                                         , fileSystemPermission = fileSystemPermission
@@ -161,22 +216,22 @@ program config =
                                     Node.startProgram
                             )
                     )
-        , update = \event state -> update config event state
-        , subscriptions = \state -> subscriptions config state
+        , update =
+            \event state ->
+                updateAnalyzingProjectAt projectToAnalyzePath config event state
+        , subscriptions =
+            \state ->
+                subscriptionsAnalyzingProjectAt projectToAnalyzePath config state
         }
 
 
-projectToAnalyzePath : FileSystem.Path.Path
-projectToAnalyzePath =
-    FileSystem.Path.fromPosixString ".."
-
-
 readGrenPackage :
-    FileSystem.Permission
+    FileSystem.Path.Path
+    -> FileSystem.Permission
     -> Compiler.Paths.CacheRoot
     -> { name : String, version : Compiler.Outline.VersionConstraint SemanticVersion.SemanticVersion }
     -> Task.Task String Compiler.Package.Package
-readGrenPackage fileSystemPermission cacheRoot { name, version } =
+readGrenPackage projectToAnalyzePath fileSystemPermission cacheRoot { name, version } =
     Compiler.Package.loadFromPath fileSystemPermission
         (when version is
             Compiler.Outline.LocalPath localPath ->
@@ -274,10 +329,12 @@ parseCompilerPackage package =
 
 
 initialInfoTask :
-    { extraPaths : Array String
-    , fileSystemPermission : FileSystem.Permission
-    , platform : Node.Platform
-    }
+    FileSystem.Path.Path
+    ->
+        { extraPaths : Array String
+        , fileSystemPermission : FileSystem.Permission
+        , platform : Node.Platform
+        }
     ->
         Task.Task
             Never
@@ -293,7 +350,7 @@ initialInfoTask :
                         }
                 }
             )
-initialInfoTask { extraPaths, fileSystemPermission, platform } =
+initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platform } =
     let
         grenJsonPath : FileSystem.Path.Path
         grenJsonPath =
@@ -368,7 +425,8 @@ initialInfoTask { extraPaths, fileSystemPermission, platform } =
                                     |> compilerOutlineDirectDependencies
                                     |> Array.map
                                         (\directDependency ->
-                                            readGrenPackage fileSystemPermission cacheRoot
+                                            readGrenPackage projectToAnalyzePath
+                                                fileSystemPermission cacheRoot
                                                 directDependency
                                                 |> Task.map parseCompilerPackage
                                         )
@@ -438,7 +496,19 @@ initWith :
        , fileSystemPermission : FileSystem.Permission
        }
     -> Task.Task Never { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
-initWith config { environment, terminalConfiguration = maybeTerminalConfiguration, fileSystemPermission } =
+initWith config nodeStuff =
+    initWithAnalyzingProjectAt projectToAnalyzeParentPath config nodeStuff
+
+
+initWithAnalyzingProjectAt :
+    FileSystem.Path.Path
+    -> { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> { environment : Node.Environment
+       , terminalConfiguration : Maybe Terminal.Configuration
+       , fileSystemPermission : FileSystem.Permission
+       }
+    -> Task.Task Never { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
+initWithAnalyzingProjectAt projectToAnalyzePath config { environment, fileSystemPermission, terminalConfiguration = maybeTerminalConfiguration } =
     Task.succeed
         (\initialInfoOrError {} ->
             when initialInfoOrError is
@@ -563,7 +633,7 @@ initWith config { environment, terminalConfiguration = maybeTerminalConfiguratio
                                     }
         )
         |> Task.andMap
-            (initialInfoTask
+            (initialInfoTask projectToAnalyzePath
                 { extraPaths = config.extraPaths
                 , fileSystemPermission = fileSystemPermission
                 , platform = environment.platform
@@ -588,6 +658,15 @@ subscriptions :
     -> ProgramState
     -> Platform.Sub.Sub ProgramEvent
 subscriptions config stateOrExited =
+    subscriptionsAnalyzingProjectAt projectToAnalyzeParentPath config stateOrExited
+
+
+subscriptionsAnalyzingProjectAt :
+    FileSystem.Path.Path
+    -> { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> ProgramState
+    -> Platform.Sub.Sub ProgramEvent
+subscriptionsAnalyzingProjectAt projectToAnalyzePath config stateOrExited =
     when stateOrExited is
         Exiting ->
             Platform.Sub.none
@@ -687,6 +766,16 @@ update :
     -> ProgramState
     -> { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
 update config event stateOrExited =
+    updateAnalyzingProjectAt projectToAnalyzeParentPath config event stateOrExited
+
+
+updateAnalyzingProjectAt :
+    FileSystem.Path.Path
+    -> { checks : Array ExtraCheck.Check, extraPaths : Array String }
+    -> ProgramEvent
+    -> ProgramState
+    -> { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
+updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
     when stateOrExited is
         Exiting ->
             { model = Exiting, command = Platform.Cmd.none }

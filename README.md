@@ -1,7 +1,12 @@
 Scan your [gren](https://gren-lang.org/) project for bugs and bad patterns using checks written in gren and published as packages.
 It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://packages.gren-lang.org/package/packages/jfmengels/elm-review/latest/) but comes with a much simpler API and much lighter, faster internals.
 
-To use it for your project, make a directory `extra-checks` and initialize it with `gren init --platform=node`, followed by `gren package install lue-bird/gren-extra-checks` and adding a `src/Main.gren`:
+To try it out on your project with some checks exposed from this package, run
+```bash
+gren run --project=lue-bird/gren-extra-checks ExtraChecksRunnerNode
+```
+
+To then permanently use and configure it for your project, make a directory `extra-checks` and initialize it with `gren init --platform=node`, followed by `gren package install lue-bird/gren-extra-checks` and adding a `src/Main.gren`:
 ```gren
 module Main exposing (main)
 
