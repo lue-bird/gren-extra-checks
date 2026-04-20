@@ -3,7 +3,7 @@ It's heavily inspired by the phenomenal [`jfmengels/elm-review`](https://package
 
 To try it out on your project with some checks exposed from this package, run
 ```bash
-gren run --project=lue-bird/gren-extra-checks ExtraChecksRunnerNode
+gren run --package=lue-bird/gren-extra-checks ExtraChecksRunnerNode
 ```
 
 To then permanently use and configure it for your project, make a directory `extra-checks` and initialize it with `gren init --platform=node`, followed by `gren package install lue-bird/gren-extra-checks` and adding a `src/Main.gren`:

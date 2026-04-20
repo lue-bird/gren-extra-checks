@@ -109,10 +109,10 @@ type ProgramEvent
 
 {-| **only for trying out**.
 
-Gren supports running programs from anywhere using --project,
+Gren supports running programs from anywhere using --package,
 so you can run
 ```bash
-gren run --project=lue-bird/gren-extra-checks ExtraChecksRunnerNode
+gren run --package=lue-bird/gren-extra-checks ExtraChecksRunnerNode
 ```
 to test this out with the checks exposed from this package
 before deciding to add a full-fledged project configuration.
