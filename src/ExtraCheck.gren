@@ -245,16 +245,12 @@ The `syntax` field contains a tree-like structure which represents your source c
 [`Compiler.Ast.Source.Module`](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.Ast.Source#Module).
 I recommend having the documentation for that package open while writing a check.
 
-The module's
-[import statements](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.Ast.Source#Import)
-(`import Html as H exposing (div)`) in order of their definition.
-
 An example check that forbids importing both `Element` and
 `Html.Styled` in the same module:
 
     import SourcePosition
     import ExtraCheck
-    import Dict
+    import Dict exposing (Dict)
     import Array.Builder
 
     check : ExtraCheck.Check
@@ -292,10 +288,10 @@ An example check that forbids importing both `Element` and
                 \invalidImportsByPath ->
                     invalidImportsByPath
                         |> Dict.foldl
-                            (\{ key = path, value = elementImportRegion } soFar ->
+                            (\path elementImportRegion soFar ->
                                 soFar
                                     |> Array.Builder.pushLast
-                                        { path = moduleData.path
+                                        { path = path
                                         , message = "both `Element` and `Html.Styled` used"
                                         , details = "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple."
                                         , region = elementImportRegion

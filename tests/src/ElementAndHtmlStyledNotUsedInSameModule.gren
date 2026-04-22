@@ -1,0 +1,57 @@
+module ElementAndHtmlStyledNotUsedInSameModule exposing (check)
+
+
+import SourcePosition
+import ExtraCheck
+import Dict exposing (Dict)
+import Array.Builder
+
+
+check : ExtraCheck.Check
+check =
+    ExtraCheck.create
+        { inspectModule =
+            \moduleData ->
+                let
+                    importedModuleNames : Dict String SourcePosition.Region
+                    importedModuleNames =
+                        moduleData.syntax.imports
+                            |> Array.foldl
+                                (\{ value = import_ } soFar ->
+                                    soFar
+                                        |> Dict.set import_.module_.value
+                                            (import_.module_ |> ExtraCheck.locatedRegion)
+                                )
+                                Dict.empty
+                in
+                when
+                    Maybe.map2 (\elementImportRegion _ -> elementImportRegion)
+                        (importedModuleNames |> Dict.get "Element")
+                        (importedModuleNames |> Dict.get "Html.Styled")
+                is
+                    Just elementImportRegion ->
+                        Dict.singleton moduleData.path elementImportRegion
+
+                    _ ->
+                        Dict.empty
+        , inspectDirectDependencies = \_ -> Dict.empty
+        , inspectGrenJson = \_ -> Dict.empty
+        , inspectExtraFile = \_ -> Dict.empty
+        , knowledgeMerge = \a b -> Dict.union a b
+        , report =
+            \invalidImportsByPath ->
+                invalidImportsByPath
+                    |> Dict.foldl
+                        (\path elementImportRegion soFar ->
+                            soFar
+                                |> Array.Builder.pushLast
+                                    { path = path
+                                    , message = "both `Element` and `Html.Styled` used"
+                                    , details = "At fruits.com, we use `Element` in the dashboard application, and `Html.Styled` in the rest of the code. We want to use `Element` in our new projects, but in projects using `Html.Styled`, we don't want to use both libraries to keep things simple."
+                                    , region = elementImportRegion
+                                    , fix = []
+                                    }
+                        )
+                        (Array.Builder.empty 0)
+                    |> Array.Builder.toArray
+        }
