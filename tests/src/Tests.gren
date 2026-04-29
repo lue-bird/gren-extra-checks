@@ -631,6 +631,41 @@ tests =
                               }
                             ]
                 )
+            , Test.test "module-defined variable which has a documentation comment"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = ""
+                                {-| Helper -}
+                                unusedVariable = ""
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "A.unusedVariable is never referenced"
+                              , details =
+                                    "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
+                              , region = ExtraCheck.ExpectUnder "unusedVariable"
+                              , fixedFiles =
+                                    [ { path = "src/A.gren"
+                                      , source =
+                                            """
+                                            module A exposing (main)
+                                            main = ""
+
+                                            """
+                                      }
+                                    ]
+                              }
+                            ]
+                )
             , Test.test "module-defined variable in exposed module but not exposed"
                 (\{} ->
                     { projectConfiguration =

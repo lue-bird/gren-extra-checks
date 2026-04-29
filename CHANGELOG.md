@@ -1,6 +1,8 @@
 #### 2.0.1
 - `ExtraChecksRunnerNode`: ignore js source files in project source directories, enabling use for `gren-lang/core`. Fixes https://github.com/lue-bird/gren-extra-checks/issues/1
-- `IntroducedNameIsUsed`: consider function names in infix declarations as used
+- `IntroducedNameIsUsed`:
+    - consider function names in infix declarations as used
+    - remove documentation comments along with declarations
 
 ## 2.0.0
 - upgrade `gren-lang/compiler-common` to 2.0.0 and as a result `gren-lang/compiler-node` to 4.0.1.

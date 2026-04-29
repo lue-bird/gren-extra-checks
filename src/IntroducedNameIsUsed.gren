@@ -330,7 +330,7 @@ inspectModule module_ =
                         soFar
                             |> Dict.set typeAlias.value.value.name.value
                                 { nameRegion = typeAlias.value.value.name |> ExtraCheck.locatedRegion
-                                , declarationRegion = typeAlias |> ExtraCheck.locatedRegion
+                                , declarationRegion = typeAlias |> moduleDeclarationRegionIncludingDocs
                                 , variantNames = Set.empty
                                 }
                     )
@@ -340,7 +340,7 @@ inspectModule module_ =
                                 soFar
                                     |> Dict.set choiceType.value.value.name.value
                                         { nameRegion = choiceType.value.value.name |> ExtraCheck.locatedRegion
-                                        , declarationRegion = choiceType |> ExtraCheck.locatedRegion
+                                        , declarationRegion = choiceType |> moduleDeclarationRegionIncludingDocs
                                         , variantNames =
                                             choiceType.value.value.variants
                                                 |> Array.foldl
@@ -363,7 +363,7 @@ inspectModule module_ =
                                 { nameRegion =
                                     valueOrFunctionDeclaration.value.value.name |> ExtraCheck.locatedRegion
                                 , declarationRegion =
-                                    valueOrFunctionDeclaration |> ExtraCheck.locatedRegion
+                                    valueOrFunctionDeclaration |> moduleDeclarationRegionIncludingDocs
                                 , portModuleKeywordStartIfPort = Nothing
                                 }
                     )
@@ -390,7 +390,7 @@ inspectModule module_ =
                                             |> Dict.set
                                                 port_.value.value.name.value
                                                 { nameRegion = port_.value.value.name |> ExtraCheck.locatedRegion
-                                                , declarationRegion = port_ |> ExtraCheck.locatedRegion
+                                                , declarationRegion = port_ |> moduleDeclarationRegionIncludingDocs
                                                 , portModuleKeywordStartIfPort = modulePortKeywordStart
                                                 }
                                     )
@@ -1702,6 +1702,16 @@ Replace with ExtraCheck.locatedRegion once fixed.
 expressionRegion : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Region
 expressionRegion expression =
     { start = expression |> expressionStart, end = expression.end }
+
+
+moduleDeclarationRegionIncludingDocs : Compiler.Ast.Source.ModuleDeclaration declaration -> Compiler.SourcePosition.Region
+moduleDeclarationRegionIncludingDocs moduleDeclaration =
+    when moduleDeclaration.value.docs is
+        Nothing ->
+            moduleDeclaration |> ExtraCheck.locatedRegion
+
+        Just docs ->
+            { start = docs.start, end = moduleDeclaration.end }
 
 
 expressionStart : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Position
