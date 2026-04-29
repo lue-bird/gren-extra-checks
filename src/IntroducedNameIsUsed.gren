@@ -10,7 +10,7 @@ import ExtraCheck
 import Dict
 import Compiler.Ast.Source
 import DictLocalExtra
-import SourcePosition
+import Compiler.SourcePosition
 import Array.Builder
 import Compiler.Parse.Context
 import Set
@@ -77,7 +77,7 @@ type alias Knowledge =
             , exposing_ : Compiler.Ast.Source.Exposing
             , importsWithExplicitExposes :
                 Dict.Dict String
-                    { region : SourcePosition.Region
+                    { region : Compiler.SourcePosition.Region
                     , alias : Maybe String
                     , exposes : Array Compiler.Ast.Source.Exposed
                     }
@@ -85,25 +85,25 @@ type alias Knowledge =
             , types :
                 Dict.Dict
                     String
-                    { nameRegion : SourcePosition.Region
-                    , declarationRegion : SourcePosition.Region
+                    { nameRegion : Compiler.SourcePosition.Region
+                    , declarationRegion : Compiler.SourcePosition.Region
                     , variantNames : Set.Set String
                     }
             , variables :
                 Dict.Dict
                     String
-                    { nameRegion : SourcePosition.Region
-                    , declarationRegion : SourcePosition.Region
-                    , portModuleKeywordStartIfPort : Maybe SourcePosition.Position
+                    { nameRegion : Compiler.SourcePosition.Region
+                    , declarationRegion : Compiler.SourcePosition.Region
+                    , portModuleKeywordStartIfPort : Maybe Compiler.SourcePosition.Position
                     }
             , unusedLocalVariables :
                 Dict.Dict
                     -- region
                     String
                     { name : String
-                    , region : SourcePosition.Region
+                    , region : Compiler.SourcePosition.Region
                     , origin : ExtraCheck.LocalVariableOrigin
-                    , scope : SourcePosition.Region
+                    , scope : Compiler.SourcePosition.Region
                     }
             }
     , usedTypeNames :
@@ -213,7 +213,7 @@ inspectDirectDependencies directDependencies =
 inspectModule :
     { path : String
     , source : String
-    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+    , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
     , syntax : Compiler.Ast.Source.Module
     }
     -> Knowledge
@@ -229,7 +229,7 @@ inspectModule module_ =
             , withExplicitExposes :
                 Dict.Dict
                     String
-                    { region : SourcePosition.Region
+                    { region : Compiler.SourcePosition.Region
                     , alias : Maybe String
                     , exposes : Array Compiler.Ast.Source.Exposed
                     }
@@ -537,7 +537,7 @@ inspectModule module_ =
                                                 Nothing ->
                                                     soFarAcrossModuleVariables
                                                 Just signature ->
-                                                    signature.value
+                                                    signature.type_.value
                                                         |> typeReferencesInto soFarAcrossModuleVariables
                                                             typeReferenceToModuleOrigin
                                             )
@@ -766,7 +766,7 @@ report knowledge =
                                                 |> Maybe.map
                                                     (\packageNameSourceIndex ->
                                                         let
-                                                            start : SourcePosition.Position
+                                                            start : Compiler.SourcePosition.Position
                                                             start =
                                                                 packageNameSourceIndex
                                                                     |> ExtraCheck.sourceUnitIndexToPosition grenJsonSource
@@ -900,7 +900,7 @@ unusedTypeError :
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
             Dict.Dict String
-                { region : SourcePosition.Region
+                { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
                 }
@@ -912,7 +912,7 @@ unusedTypeError :
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
             Dict.Dict String
-                { region : SourcePosition.Region
+                { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
                 }
@@ -921,8 +921,8 @@ unusedTypeError :
     -> String
     -> String
     ->
-        { nameRegion : SourcePosition.Region
-        , declarationRegion : SourcePosition.Region
+        { nameRegion : Compiler.SourcePosition.Region
+        , declarationRegion : Compiler.SourcePosition.Region
         , variantNames : Set.Set String
         }
     -> ExtraCheck.Error
@@ -1025,7 +1025,7 @@ unusedModuleVariableError :
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
             Dict.Dict String
-                { region : SourcePosition.Region
+                { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
                 }
@@ -1037,7 +1037,7 @@ unusedModuleVariableError :
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
             Dict.Dict String
-                { region : SourcePosition.Region
+                { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
                 }
@@ -1046,9 +1046,9 @@ unusedModuleVariableError :
     -> String
     -> String
     ->
-        { nameRegion : SourcePosition.Region
-        , declarationRegion : SourcePosition.Region
-        , portModuleKeywordStartIfPort : Maybe SourcePosition.Position
+        { nameRegion : Compiler.SourcePosition.Region
+        , declarationRegion : Compiler.SourcePosition.Region
+        , portModuleKeywordStartIfPort : Maybe Compiler.SourcePosition.Position
         }
     -> ExtraCheck.Error
 unusedModuleVariableError moduleHeaders originModuleHeader variableOriginModule variableName variableNameOrigin =
@@ -1156,7 +1156,7 @@ unusedModuleVariableError moduleHeaders originModuleHeader variableOriginModule 
 
 type ExposingRemoveMemberEdit
     = RemoveExposingEntirely
-    | RemoveExposingRegion SourcePosition.Region
+    | RemoveExposingRegion Compiler.SourcePosition.Region
 
 
 exposingRemoveVariableEdit : String -> Array Compiler.Ast.Source.Exposed -> Maybe ExposingRemoveMemberEdit
@@ -1394,18 +1394,18 @@ unusedVariablesAddFromWithinExpression :
             -- region
             String
             { name : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
-            , scope : SourcePosition.Region
+            , scope : Compiler.SourcePosition.Region
             }
     ->
         Dict.Dict
             -- region
             String
             { name : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
-            , scope : SourcePosition.Region
+            , scope : Compiler.SourcePosition.Region
             }
 unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariables =
     when parentExpression.value is
@@ -1566,28 +1566,28 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
 unusedLocalVariablesAdd :
     String
     -> ExtraCheck.LocalVariableOrigin
-    -> SourcePosition.Region
+    -> Compiler.SourcePosition.Region
     ->
         Dict.Dict
             -- region
             String
             { name : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
-            , scope : SourcePosition.Region
+            , scope : Compiler.SourcePosition.Region
             }
     ->
         Dict.Dict
             -- region
             String
             { name : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , origin : ExtraCheck.LocalVariableOrigin
-            , scope : SourcePosition.Region
+            , scope : Compiler.SourcePosition.Region
             }
 unusedLocalVariablesAdd name origin scope soFar =
     let
-        region : SourcePosition.Region
+        region : Compiler.SourcePosition.Region
         region =
             when origin is
                 ExtraCheck.OriginPatternPunnedField fieldRegion ->
@@ -1673,7 +1673,7 @@ expressionTypeReferencesInto into typeReferenceOriginModule expression =
             )
 
 
-regionIncludes : SourcePosition.Position -> SourcePosition.Region -> Bool
+regionIncludes : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Region -> Bool
 regionIncludes positionToCheck region =
     (when sourcePositionCompare region.start positionToCheck is
         LT -> True
@@ -1691,12 +1691,12 @@ regionIncludes positionToCheck region =
 
 Replace with ExtraCheck.locatedRegion once fixed.
 -}
-expressionRegion : Compiler.Ast.Source.Expression -> SourcePosition.Region
+expressionRegion : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Region
 expressionRegion expression =
     { start = expression |> expressionStart, end = expression.end }
 
 
-expressionStart : Compiler.Ast.Source.Expression -> SourcePosition.Position
+expressionStart : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Position
 expressionStart expression =
     when expression.value is
         Compiler.Ast.Source.Access recordAccess ->
@@ -1712,7 +1712,7 @@ expressionStart expression =
             expression.start
 
 
-sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.row b.row is
         LT -> LT
@@ -1721,12 +1721,12 @@ sourcePositionCompare a b =
             Basics.compare a.col b.col
 
 
-regionToString : SourcePosition.Region -> String
+regionToString : Compiler.SourcePosition.Region -> String
 regionToString region =
     (region.start |> positionToString) ++ "-" ++ (region.end |> positionToString)
 
 
-positionToString : SourcePosition.Position -> String
+positionToString : Compiler.SourcePosition.Position -> String
 positionToString position =
     (position.row |> String.fromInt) ++ ":" ++ (position.col |> String.fromInt)
 

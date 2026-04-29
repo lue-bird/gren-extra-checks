@@ -41,9 +41,9 @@ by only listing all immediate sub-parts of a piece of syntax you can choose to t
 E.g. to find all `as` pattern regions
 
     pushAllAsPatternRegionsInto :
-        Array.Builder.Builder SourcePosition.Region
+        Array.Builder.Builder Compiler.SourcePosition.Region
         -> Compiler.Ast.Source.Pattern
-        -> Array.Builder.Builder SourcePosition.Region
+        -> Array.Builder.Builder Compiler.SourcePosition.Region
     pushAllAsPatternRegionsInto builder pattern =
         pattern.value
             |> ExtraCheck.patternImmediateSubsFold
@@ -109,7 +109,7 @@ import Expect
 import DictLocalExtra
 import Json.Decode
 import Set exposing (Set)
-import SourcePosition
+import Compiler.SourcePosition
 import Compiler.Ast.Source
 import Array.Builder
 import String.Parser.Advanced
@@ -190,7 +190,7 @@ type Run
             Array
                 { path : String
                 , source : String
-                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                 , syntax : Compiler.Ast.Source.Module
                 }
          , removedExtraFilePaths : Array String
@@ -201,7 +201,7 @@ type Run
                 Dict
                     String
                     (Array
-                        { region : SourcePosition.Region
+                        { region : Compiler.SourcePosition.Region
                         , message : String
                         , details : String
                         , fixEditsByPath : Dict String (Array SourceEdit)
@@ -248,7 +248,7 @@ I recommend having the documentation for that package open while writing a check
 An example check that forbids importing both `Element` and
 `Html.Styled` in the same module:
 
-    import SourcePosition
+    import Compiler.SourcePosition
     import ExtraCheck
     import Dict exposing (Dict)
     import Array.Builder
@@ -259,7 +259,7 @@ An example check that forbids importing both `Element` and
             { inspectModule =
                 \moduleData ->
                     let
-                        importedModuleNames : Dict String SourcePosition.Region
+                        importedModuleNames : Dict String Compiler.SourcePosition.Region
                         importedModuleNames =
                             moduleData.syntax.imports
                                 |> Array.foldl
@@ -310,7 +310,7 @@ create :
     { inspectModule :
         { path : String
         , source : String
-        , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+        , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
         , syntax : Compiler.Ast.Source.Module
         }
         -> knowledge
@@ -469,7 +469,7 @@ Take the gren compiler errors as inspiration in terms of helpfulness:
 -}
 type alias Error =
     { path : String
-    , region : SourcePosition.Region
+    , region : Compiler.SourcePosition.Region
     , message : String
     , details : String
     , fix : Array { path : String, edits : Array SourceEdit }
@@ -546,7 +546,7 @@ run :
             Array
                 { path : String
                 , source : String
-                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                 , syntax : Compiler.Ast.Source.Module
                 }
         , removedExtraFilePaths : Array String
@@ -557,7 +557,7 @@ run :
             Dict
                 String
                 (Array
-                    { region : SourcePosition.Region
+                    { region : Compiler.SourcePosition.Region
                     , message : String
                     , details : String
                     , fixEditsByPath : Dict String (Array SourceEdit)
@@ -584,7 +584,7 @@ type alias Cache knowledge =
 
 
 {-| Package the start and end positions of a located syntax node
-into a `SourcePosition.Region`.
+into a `Compiler.SourcePosition.Region`.
 
     replaceExpressionByEmptyArrayFix : Compiler.Ast.Source.Expression -> ExtraCheck.SourceEdit
     replaceExpressionByEmptyArrayFix =
@@ -593,7 +593,7 @@ into a `SourcePosition.Region`.
             "[]"
 
 -}
-locatedRegion : SourcePosition.Located value -> SourcePosition.Region
+locatedRegion : Compiler.SourcePosition.Located value -> Compiler.SourcePosition.Region
 locatedRegion located =
     { start = located.start, end = located.end }
 
@@ -601,7 +601,7 @@ locatedRegion located =
 {-| In when you need the read the source in a region as formatted by the user.
 This can be nice to keep the user's formatting if you just move code around
 -}
-sourceExtractInRegion : SourcePosition.Region -> String -> String
+sourceExtractInRegion : Compiler.SourcePosition.Region -> String -> String
 sourceExtractInRegion region string =
     -- can be optimized
     string
@@ -619,10 +619,10 @@ sourceExtractInRegion region string =
 
 
 {-| Find all occurrences of a given section in the source in the when you
-can't access or easily calculate the [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region).
+can't access or easily calculate the [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.SourcePosition#Region).
 Use sparingly
 -}
-sourceRegionsOf : String -> String -> Array SourcePosition.Region
+sourceRegionsOf : String -> String -> Array Compiler.SourcePosition.Region
 sourceRegionsOf sectionToFind source =
     let
         sectionToFindLength : Int
@@ -642,10 +642,10 @@ sourceRegionsOf sectionToFind source =
 
 
 {-| Convert an offset into the source (measured in units)
-into a [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/SourcePosition#Region).
+into a [region](https://packages.gren-lang.org/package/gren-lang/compiler-common/version/latest/module/Compiler.SourcePosition#Region).
 Use sparingly
 -}
-sourceUnitIndexToPosition : String -> Int -> SourcePosition.Position
+sourceUnitIndexToPosition : String -> Int -> Compiler.SourcePosition.Position
 sourceUnitIndexToPosition source sourceOffset =
     -- can be optimized
     let
@@ -802,26 +802,26 @@ implicitImports =
 in order to fix a [check error](#Error)
 -}
 type alias SourceEdit =
-    { region : SourcePosition.Region, replacement : String }
+    { region : Compiler.SourcePosition.Region, replacement : String }
 
 
 {-| Remove the section in between a given region
 -}
-removeRegion : SourcePosition.Region -> SourceEdit
+removeRegion : Compiler.SourcePosition.Region -> SourceEdit
 removeRegion regionToRemove =
     replaceRegion regionToRemove ""
 
 
 {-| Replace the section in between a given region by something
 -}
-replaceRegion : SourcePosition.Region -> String -> SourceEdit
+replaceRegion : Compiler.SourcePosition.Region -> String -> SourceEdit
 replaceRegion region replacement =
     { region = region, replacement = replacement }
 
 
 {-| Insert something at the given position
 -}
-insertAt : SourcePosition.Position -> String -> SourceEdit
+insertAt : Compiler.SourcePosition.Position -> String -> SourceEdit
 insertAt location toInsert =
     replaceRegion { start = location, end = location } toInsert
 
@@ -860,7 +860,7 @@ sourceApplyEdits fixes sourceCode =
         else
             Ok resultAfterFix
 
-sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.row b.row is
         LT -> LT
@@ -912,7 +912,7 @@ sourceEditsContainRegionCollisions fixes =
             )
 
 
-regionsCollide : SourcePosition.Region -> SourcePosition.Region -> Bool
+regionsCollide : Compiler.SourcePosition.Region -> Compiler.SourcePosition.Region -> Bool
 regionsCollide a b =
     when sourcePositionCompare a.end b.start is
         LT ->
@@ -1028,7 +1028,7 @@ If the section occurs multiple times in the source, use `UnderExactly { section 
 -}
 type ExpectedErrorRegion
     = ExpectUnder String
-    | ExpectUnderExactly { section : String, startingAt : SourcePosition.Position }
+    | ExpectUnderExactly { section : String, startingAt : Compiler.SourcePosition.Position }
 
 
 expectationsViolated : Array String -> Expect.Expectation
@@ -1220,7 +1220,7 @@ toCheckResult check project =
                 (Array.Builder.Builder
                     { path : String
                     , source : String
-                    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                    , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                     , syntax : Compiler.Ast.Source.Module
                     }
                 )
@@ -1300,7 +1300,7 @@ parseModules :
             (Array.Builder.Builder
                 { path : String
                 , source : String
-                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                 , syntax : Compiler.Ast.Source.Module
                 }
             )
@@ -1344,9 +1344,18 @@ parseModules moduleFiles =
             (Ok (Array.Builder.empty 2))
 
 
+moduleAndCommentsParser :
+    String.Parser.Advanced.Parser
+        Compiler.Parse.Context.Context
+        Compiler.Parse.Module.Error
+        { comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
+        , syntax : Compiler.Ast.Source.Module
+        }
 moduleAndCommentsParser =
     String.Parser.Advanced.succeed
-        (\syntax context -> { syntax = syntax, comments = context.comments })
+        (\syntax context ->
+            { syntax = syntax, comments = context.comments |> Array.Builder.toArray }
+        )
         |> String.Parser.Advanced.keep Compiler.Parse.Module.parser
         |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
@@ -1821,7 +1830,7 @@ checkMessageAppearsUnder toCheck =
                 {}
 
 
-underMismatch : { error_ | region : SourcePosition.Region, message : String, details : String } -> { under : String, errorSourceInRegion : String } -> String
+underMismatch : { error | region : Compiler.SourcePosition.Region, message : String, details : String } -> { under : String, errorSourceInRegion : String } -> String
 underMismatch error under =
     failureMessage "error location doesn't match"
         ("I found an error with the message\n\n  "
@@ -1838,7 +1847,7 @@ underMismatch error under =
         )
 
 
-wrongLocation : { error_ | region : SourcePosition.Region, message : String, details : String } -> SourcePosition.Region -> String -> String
+wrongLocation : { error | region : Compiler.SourcePosition.Region, message : String, details : String } -> Compiler.SourcePosition.Region -> String -> String
 wrongLocation error region under =
     failureMessage "exact error location doesn't match"
         ("I was looking for the error with the message\n\n  "
@@ -1852,7 +1861,7 @@ wrongLocation error region under =
         )
 
 
-locationIsMissingInSourceCode : { error_ | region : SourcePosition.Region, message : String, details : String } -> String -> String
+locationIsMissingInSourceCode : { error | region : Compiler.SourcePosition.Region, message : String, details : String } -> String -> String
 locationIsMissingInSourceCode error under =
     failureMessage "expected error location is missing"
         ("The exact location where the error appears isn't present in the source code.\n\nYou are looking for the error message\n\n  "
@@ -1865,7 +1874,7 @@ locationIsMissingInSourceCode error under =
         )
 
 
-locationIsAmbiguousInSourceCode : String -> { error_ | region : SourcePosition.Region, message : String, details : String } -> String -> Array Int -> String
+locationIsAmbiguousInSourceCode : String -> { error | region : Compiler.SourcePosition.Region, message : String, details : String } -> String -> Array Int -> String
 locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
     failureMessage "expected error location is ambiguous"
         ("The exact location where the error appears is ambiguous.\n\nYou are looking for the error message\n\n  "
@@ -1889,7 +1898,7 @@ locationIsAmbiguousInSourceCode sourceCode error under occurrencesInSourceCode =
         )
 
 
-startingLocationInSource : String -> Int -> SourcePosition.Position
+startingLocationInSource : String -> Int -> Compiler.SourcePosition.Position
 startingLocationInSource sourceCode position =
     let
         linesBeforeAndIncludingPosition : Array String
@@ -1924,7 +1933,7 @@ checkDetailsAreCorrect error expectedError =
         {}
 
 
-unexpectedDetails : String -> { error_ | region : SourcePosition.Region, message : String, details : String } -> String
+unexpectedDetails : String -> { error_ | region : Compiler.SourcePosition.Region, message : String, details : String } -> String
 unexpectedDetails expectedDetails error =
     failureMessage "error details don't match"
         ("I found an error for a file with the message\n\n  "
@@ -2196,7 +2205,7 @@ tooFewErrors path missingExpectedErrors =
         )
 
 
-tooManyErrors : String -> Array { error_ | region : SourcePosition.Region, message : String, details : String } -> String
+tooManyErrors : String -> Array { error_ | region : Compiler.SourcePosition.Region, message : String, details : String } -> String
 tooManyErrors path extraErrors =
     failureMessage "unexpected additional errors"
         ("I found too many errors for the file at path "
@@ -2212,7 +2221,7 @@ tooManyErrors path extraErrors =
         )
 
 
-regionToCodeString : SourcePosition.Region -> String
+regionToCodeString : Compiler.SourcePosition.Region -> String
 regionToCodeString region =
     "{ start = "
         ++ (region.start |> positionToCodeString)
@@ -2261,7 +2270,7 @@ formatSourceCode string =
     formatSourceCodeWithFormatter identity (string |> String.lines)
 
 
-positionToCodeString : SourcePosition.Position -> String
+positionToCodeString : Compiler.SourcePosition.Position -> String
 positionToCodeString position =
     "{ row = "
         ++ (position.row |> String.fromInt)
@@ -2271,7 +2280,7 @@ positionToCodeString position =
 
 
 type alias FileCheckError =
-    { region : SourcePosition.Region
+    { region : Compiler.SourcePosition.Region
     , message : String
     , details : String
     , fixEditsByPath : Dict String (Array SourceEdit)
@@ -2438,13 +2447,13 @@ expressionImmediateSubsFold reduce initialState parentExpression =
 -}
 type LocalVariableOrigin
     = OriginLetDefineVariable
-        { variableDefine : SourcePosition.Located Compiler.Ast.Source.DefineRecord
-        , outerLetRegion : SourcePosition.Region
-        , outerLetAllDefs : Array (SourcePosition.Located Compiler.Ast.Source.Def)
+        { variableDefine : Compiler.SourcePosition.Located Compiler.Ast.Source.DefineRecord
+        , outerLetRegion : Compiler.SourcePosition.Region
+        , outerLetAllDefs : Array (Compiler.SourcePosition.Located Compiler.Ast.Source.Def)
         , outerLetBody : Compiler.Ast.Source.Expression
         }
-    | OriginPatternPunnedField SourcePosition.Region
-    | OriginPatternVariable SourcePosition.Region
+    | OriginPatternPunnedField Compiler.SourcePosition.Region
+    | OriginPatternVariable Compiler.SourcePosition.Region
 
 
 {-| Walk immediate child-expressions,

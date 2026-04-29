@@ -7,7 +7,7 @@ module DebugIsNotUsed exposing (check)
 -}
 
 import ExtraCheck
-import SourcePosition
+import Compiler.SourcePosition
 import Compiler.Ast.Source
 import Set
 import Dict
@@ -68,9 +68,9 @@ type alias Knowledge =
     Dict.Dict
         -- path
         String
-        { debugLogUses : Array SourcePosition.Region
-        , debugTodoUses : Array SourcePosition.Region
-        , debugToStringUses : Array SourcePosition.Region
+        { debugLogUses : Array Compiler.SourcePosition.Region
+        , debugTodoUses : Array Compiler.SourcePosition.Region
+        , debugToStringUses : Array Compiler.SourcePosition.Region
         }
 
 
@@ -82,7 +82,7 @@ knowledgeNone =
 moduleDataToKnowledge :
     { path : String
     , source : String
-    , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+    , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
     , syntax : Compiler.Ast.Source.Module
     }
     -> Knowledge
@@ -279,7 +279,7 @@ report knowledge =
 expressionUsedReferencesFoldExcludingLocalVariables :
     Set.Set String
     -> Dict.Dict String ExtraCheck.LocalVariableOrigin
-    -> ({ qualification : String, name : String } -> SourcePosition.Region -> state -> state)
+    -> ({ qualification : String, name : String } -> Compiler.SourcePosition.Region -> state -> state)
     -> state
     -> Compiler.Ast.Source.Expression
     -> state

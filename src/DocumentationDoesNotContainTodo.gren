@@ -10,7 +10,7 @@ import ExtraCheck
 import Dict
 import Compiler.Ast.Source
 import DictLocalExtra
-import SourcePosition
+import Compiler.SourcePosition
 import Array.Builder
 import Compiler.Outline
 import String.Regex
@@ -81,7 +81,7 @@ type alias Knowledge =
         String
         (Array
             { mark : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             }
         )
 
@@ -132,7 +132,7 @@ inspectModule :
     String.Regex.Regex
     -> { path : String
        , source : String
-       , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+       , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
        , syntax : Compiler.Ast.Source.Module
        }
     -> Knowledge
@@ -141,24 +141,19 @@ inspectModule marksRegex module_ =
         occurrences :
             Array
                 { mark : String
-                , region : SourcePosition.Region
+                , region : Compiler.SourcePosition.Region
                 }
         occurrences =
             module_.comments
-                |> Dict.foldl
-                    (\_ commentsInLine soFarAcrossCommentLines ->
-                        commentsInLine
-                            |> Array.foldl
-                                (\comment soFarAcrossComments ->
-                                    comment.value
-                                        |> commentValueContent
-                                        |> sourceOccurrencesOf marksRegex
-                                        |> markOccurrencesRelativeToInto soFarAcrossComments
-                                            { row = comment.row
-                                            , col = comment.col + 2
-                                            }
-                                )
-                                soFarAcrossCommentLines
+                |> Array.foldl
+                    (\comment soFarAcrossComments ->
+                        comment.value
+                            |> commentContent
+                            |> sourceOccurrencesOf marksRegex
+                            |> markOccurrencesRelativeToInto soFarAcrossComments
+                                { row = comment.start.row
+                                , col = comment.start.col + 2
+                                }
                     )
                     (when module_.syntax.docs is
                         Nothing -> Array.Builder.empty 0
@@ -166,9 +161,7 @@ inspectModule marksRegex module_ =
                             moduleDocs.value
                                 |> sourceOccurrencesOf marksRegex
                                 |> markOccurrencesRelativeToInto (Array.Builder.empty 0)
-                                    { row = moduleDocs.start.row
-                                    , col = moduleDocs.start.col + 3
-                                    }
+                                    (documentationCommentContentStart moduleDocs)
                     )
                 |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.values
                 |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.unions
@@ -195,12 +188,12 @@ addMarkOccurrencesFromModuleDeclarations :
     ->
         Array.Builder.Builder
             { mark : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             }
     ->
         Array.Builder.Builder
             { mark : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             }
 addMarkOccurrencesFromModuleDeclarations marksRegex moduleDeclarations builder =
     moduleDeclarations
@@ -214,24 +207,31 @@ addMarkOccurrencesFromModuleDeclarations marksRegex moduleDeclarations builder =
                         moduleDeclarationDocs.value
                             |> sourceOccurrencesOf marksRegex
                             |> markOccurrencesRelativeToInto soFar
-                                { row = moduleDeclarationDocs.start.row
-                                , col = moduleDeclarationDocs.start.col + 3
-                                }
+                                (documentationCommentContentStart moduleDeclarationDocs)
             )
             builder
+
+
+documentationCommentContentStart :
+    Compiler.SourcePosition.Located comment
+    -> Compiler.SourcePosition.Position
+documentationCommentContentStart documentationComment =
+    { row = documentationComment.start.row
+    , col = documentationComment.start.col + 3
+    }
 
 
 markOccurrencesRelativeToInto :
     Array.Builder.Builder
         { mark : String
-        , region : SourcePosition.Region
+        , region : Compiler.SourcePosition.Region
         }
-    -> SourcePosition.Position
-    -> Maybe (Array { mark : String, region : SourcePosition.Region })
+    -> Compiler.SourcePosition.Position
+    -> Maybe (Array { mark : String, region : Compiler.SourcePosition.Region })
     ->
         Array.Builder.Builder
             { mark : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             }
 markOccurrencesRelativeToInto builder afterCommentOpen maybeOccurrencesInComment =
     when maybeOccurrencesInComment is
@@ -254,9 +254,9 @@ markOccurrencesRelativeToInto builder afterCommentOpen maybeOccurrencesInComment
 
 
 regionRelativeTo :
-    SourcePosition.Position
-    -> SourcePosition.Region
-    -> SourcePosition.Region
+    Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Region
+    -> Compiler.SourcePosition.Region
 regionRelativeTo baseStart offsetRegion =
     { start = offsetRegion.start |> locationRelativeTo baseStart
     , end = offsetRegion.end |> locationRelativeTo baseStart
@@ -264,14 +264,14 @@ regionRelativeTo baseStart offsetRegion =
 
 
 locationRelativeTo :
-    SourcePosition.Position
-    -> SourcePosition.Position
-    -> SourcePosition.Position
+    Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Position
 locationRelativeTo baseStart offsetLocation =
     when offsetLocation.row is
         1 ->
             { row = baseStart.row
-            , col = baseStart.col + offsetLocation.col
+            , col = baseStart.col + (offsetLocation.col - 1)
             }
 
         offsetRowAtLeast2 ->
@@ -280,8 +280,8 @@ locationRelativeTo baseStart offsetLocation =
             }
 
 
-commentValueContent : Compiler.Parse.Context.CommentValue -> String
-commentValueContent commentValue =
+commentContent : Compiler.Parse.Context.Comment -> String
+commentContent commentValue =
     when commentValue is
         Compiler.Parse.Context.Line line -> line
         Compiler.Parse.Context.Block block -> block
@@ -314,7 +314,7 @@ report knowledge =
 sourceOccurrencesOf :
     String.Regex.Regex
     -> String
-    -> Maybe (Array { mark : String, region : SourcePosition.Region })
+    -> Maybe (Array { mark : String, region : Compiler.SourcePosition.Region })
 sourceOccurrencesOf marksRegex source =
     let
         matches : Array String.Regex.Match

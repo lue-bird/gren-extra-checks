@@ -1,7 +1,7 @@
 module ElementAndHtmlStyledNotUsedInSameModule exposing (check)
 
 
-import SourcePosition
+import Compiler.SourcePosition
 import ExtraCheck
 import Dict exposing (Dict)
 import Array.Builder
@@ -13,7 +13,7 @@ check =
         { inspectModule =
             \moduleData ->
                 let
-                    importedModuleNames : Dict String SourcePosition.Region
+                    importedModuleNames : Dict String Compiler.SourcePosition.Region
                     importedModuleNames =
                         moduleData.syntax.imports
                             |> Array.foldl

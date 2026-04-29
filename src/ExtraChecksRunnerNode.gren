@@ -17,7 +17,7 @@ import Dict exposing (Dict)
 import Json.Decode
 import ExtraCheck
 import Node
-import SourcePosition
+import Compiler.SourcePosition
 import Compiler.Outline
 import Compiler.Ast.Source
 import DictLocalExtra
@@ -72,13 +72,13 @@ type ProgramState
                     , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                     , message : String
                     , details : String
-                    , region : SourcePosition.Region
+                    , region : Compiler.SourcePosition.Region
                     , path : String
                     }
                 , otherErrors :
                     Dict String
                         (Array
-                            { region : SourcePosition.Region
+                            { region : Compiler.SourcePosition.Region
                             , message : String
                             , details : String
                             , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
@@ -1426,7 +1426,7 @@ reviewRunList :
             Array
                 { path : String
                 , source : String
-                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                 , syntax : Compiler.Ast.Source.Module
                 }
         , removedExtraFilePaths : Array String
@@ -1475,7 +1475,7 @@ reviewRunList checks project =
     }
 
 
-sourceRegionCompare : SourcePosition.Region -> SourcePosition.Region -> Order
+sourceRegionCompare : Compiler.SourcePosition.Region -> Compiler.SourcePosition.Region -> Order
 sourceRegionCompare a b =
     when sourcePositionCompare a.start b.start is
         LT -> LT
@@ -1484,7 +1484,7 @@ sourceRegionCompare a b =
             sourcePositionCompare a.end b.end
 
 
-sourcePositionCompare : SourcePosition.Position -> SourcePosition.Position -> Order
+sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.col b.col is
         LT -> LT
@@ -1515,7 +1515,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                     , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                     , message : String
                     , details : String
-                    , region : SourcePosition.Region
+                    , region : Compiler.SourcePosition.Region
                     , path : String
                     }
             , otherErrors : Dict String (Array FileReviewError)
@@ -1549,7 +1549,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                                                         , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                                                         , message : String
                                                         , details : String
-                                                        , region : SourcePosition.Region
+                                                        , region : Compiler.SourcePosition.Region
                                                         , path : String
                                                         }
                                                     }
@@ -1653,7 +1653,7 @@ allModuleFilesToWithParsedSyntax :
             (Array
                 { path : String
                 , source : String
-                , comments : Dict.Dict Int (Array Compiler.Parse.Context.Comment)
+                , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
                 , syntax : Compiler.Ast.Source.Module
                 }
             )
@@ -1703,15 +1703,24 @@ allModuleFilesToWithParsedSyntax moduleFiles =
             |> Result.map Array.Builder.toArray
 
 
+moduleAndCommentsParser :
+    String.Parser.Advanced.Parser
+        Compiler.Parse.Context.Context
+        Compiler.Parse.Module.Error
+        { comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
+        , syntax : Compiler.Ast.Source.Module
+        }
 moduleAndCommentsParser =
     String.Parser.Advanced.succeed
-        (\syntax context -> { syntax = syntax, comments = context.comments })
+        (\syntax context -> 
+            { syntax = syntax, comments = context.comments |> Array.Builder.toArray }
+        )
         |> String.Parser.Advanced.keep Compiler.Parse.Module.parser
         |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
 
 type alias FileReviewError =
-    { region : SourcePosition.Region
+    { region : Compiler.SourcePosition.Region
     , message : String
     , details : String
     , fixEditsByPath : Dict String (Array ExtraCheck.SourceEdit)
@@ -1724,7 +1733,7 @@ errorDisplay :
     ->
         { error_
             | path : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , message : String
             , details : String
             , fixedSources :
@@ -1871,7 +1880,7 @@ continuousNoChangeLinesCollapse noChangeLines =
                             ++ lastLine
 
 
-codeExtract : { ansi : Bool } -> String -> SourcePosition.Region -> String
+codeExtract : { ansi : Bool } -> String -> Compiler.SourcePosition.Region -> String
 codeExtract ({ ansi } as ansiConfig) source region =
     -- can be optimized
     let
@@ -1972,7 +1981,7 @@ type NextFixableOrAllUnfixable
             , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
             , message : String
             , details : String
-            , region : SourcePosition.Region
+            , region : Compiler.SourcePosition.Region
             , path : String
             }
         , otherErrors : Dict String (Array FileReviewError)
@@ -1988,7 +1997,7 @@ fixableOrAllUnfixableToFixable :
                 , fixedSources : Array { path : String, fixedSource : String, originalSource : String }
                 , message : String
                 , details : String
-                , region : SourcePosition.Region
+                , region : Compiler.SourcePosition.Region
                 , path : String
                 }
             , otherErrors : Dict String (Array FileReviewError)

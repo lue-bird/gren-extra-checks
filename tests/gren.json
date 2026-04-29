@@ -10,12 +10,12 @@
             "gren-lang/core": "7.4.0",
             "gren-lang/test": "5.0.0",
             "gren-lang/test-runner-node": "7.0.0",
-            "gren-lang/compiler-common": "1.0.0",
+            "gren-lang/compiler-common": "2.0.0",
             "lue-bird/gren-extra-checks": "local:.."
         },
         "indirect": {
             "gren-lang/node": "6.1.1",
-            "gren-lang/compiler-node": "4.0.0",
+            "gren-lang/compiler-node": "4.0.1",
             "gren-lang/url": "6.0.0"
         }
     }

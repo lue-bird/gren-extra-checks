@@ -247,7 +247,6 @@ tests =
                               }
                             ]
                 )
-                |> Test.skip
             , Test.test "in {- comment -}"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
@@ -298,6 +297,34 @@ tests =
                               }
                             ]
                 )
+            , Test.test "in {- comment -} with extra whitespace including line breaks"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (a)
+                                {- 
+                                   TODO
+                                -}
+                                a = Debug.log "·u·"
+                                """
+                          }
+                        ]
+                    , check = DocumentationDoesNotContainTodo.check [ "TODO" ]
+                    }
+                        |> ExtraCheck.expectToReport
+                            [ { path = "src/A.gren"
+                              , message = "marked TODO"
+                              , details =
+                                    "This TODO has been placed here as a reminder. Read the comment and analyze the surrounding context to decide what needs to be done. Once the issue is resolved, remove the notice."
+                              , region = ExtraCheck.ExpectUnder "TODO"
+                              , fixedFiles = []
+                              }
+                            ]
+                )
+                -- currently gren-lang/core has a bug with foldlUnits
                 |> Test.skip
             , Test.test "in {-| module doc comment -}"
                 (\{} ->

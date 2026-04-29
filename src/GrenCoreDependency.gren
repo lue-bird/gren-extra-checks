@@ -23,7 +23,7 @@ import Json.Decode
 import Compiler.Ast.Source
 import Compiler.Outline
 import Json.Decode
-import SourcePosition
+import Compiler.SourcePosition
 import String.Parser.Advanced
 import Compiler.Parse.Type
 import Compiler.Parse.Context

@@ -30,7 +30,7 @@ An example of [creating a custom check](ExtraCheck#create) to fix a typo in a st
 module StringSpellsCompanyNameCorrectly exposing (check)
 
 import ExtraCheck
-import SourcePosition
+import Compiler.SourcePosition
 import Compiler.Ast.Source
 import Compiler.Parse.Context
 import Array.Builder
@@ -50,7 +50,7 @@ check =
 
 type alias Knowledge =
     { typosInStrings :
-        Array { modulePath : String, region : SourcePosition.Region }
+        Array { modulePath : String, region : Compiler.SourcePosition.Region }
     }
 
 
@@ -79,9 +79,9 @@ moduleDataToKnowledge moduleData =
     }
 
 expressionToTyposInStringsInto :
-    Array.Builder.Builder SourcePosition.Region
+    Array.Builder.Builder Compiler.SourcePosition.Region
     -> Compiler.Ast.Source.Expression
-    -> Array.Builder.Builder SourcePosition.Region
+    -> Array.Builder.Builder Compiler.SourcePosition.Region
 expressionToTyposInStringsInto resultRegionsSoFar expression =
     when expression.value is
         Compiler.Ast.Source.StringLiteral string ->
@@ -102,9 +102,9 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
 
 
 regionRelativeTo :
-    SourcePosition.Position
-    -> SourcePosition.Region
-    -> SourcePosition.Region
+    Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Region
+    -> Compiler.SourcePosition.Region
 regionRelativeTo baseStart offsetRegion =
     { start = offsetRegion.start |> locationRelativeTo baseStart
     , end = offsetRegion.end |> locationRelativeTo baseStart
@@ -112,9 +112,9 @@ regionRelativeTo baseStart offsetRegion =
 
 
 locationRelativeTo :
-    SourcePosition.Position
-    -> SourcePosition.Position
-    -> SourcePosition.Position
+    Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Position
+    -> Compiler.SourcePosition.Position
 locationRelativeTo baseStart offsetLocation =
     when offsetLocation.row is
         1 ->
@@ -177,9 +177,7 @@ To sum up, a checklist
 
   - no LSP integration (shouldn't be too hard)
   - no ecosystem
-  - the parser implemented in `gren-lang/compiler-common` is not on par with the haskell one.
-    It for example fails to parse top-level variable names starting with type, is too strict on when is case indentation, cannot parse nested block comments, fails to parse some long lines and negation in parens,
-    and is also massively slower
+  - the parser implemented in `gren-lang/compiler-common` is much slower than the original haskell one
   - indirect dependencies are not indexed. There are no technical limitations on this AFAIK, so if you have a need for this (e.g. for generating code that needs info from distant dependency types)
   - the problem you encountered. Please [open an issue](https://github.com/lue-bird/gren-extra-checks/issues) <3
 
