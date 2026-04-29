@@ -950,7 +950,7 @@ Equivalent to (copy and adapt if necessary)
             "gren-version": "0.6.3",
             "dependencies": {
                 "direct": {
-                    "gren-lang/core": "7.4.0"
+                    "gren-lang/core": "7.4.1"
                 },
                 "indirect": {}
             }
@@ -982,7 +982,7 @@ applicationConfigurationMinimal =
             "gren-version": "0.6.3",
             "dependencies": {
                 "direct": {
-                    "gren-lang/core": "7.4.0"
+                    "gren-lang/core": "7.4.1"
                 },
                 "indirect": {}
             }

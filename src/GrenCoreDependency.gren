@@ -64,7 +64,7 @@ outline =
                 , name = Compiler.PackageName.core
                 , summary = "Gren's core modules"
                 , license = Compiler.License.bsd3
-                , version = { major = 7, minor = 4, patch = 0 }
+                , version = { major = 7, minor = 4, patch = 1 }
                 , exposedModules =
                     Compiler.Outline.ExposedDict
                         -- module names cannot be constructed safely :(
@@ -85,7 +85,7 @@ grenJsonSource =
         "name": "gren-lang/core",
         "summary": "Gren's core modules",
         "license": "BSD-3-Clause",
-        "version": "7.4.0",
+        "version": "7.4.1",
         "exposed-modules": {
             "Bytes": [
                 "Bytes",

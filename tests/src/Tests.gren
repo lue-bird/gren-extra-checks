@@ -324,8 +324,6 @@ tests =
                               }
                             ]
                 )
-                -- currently gren-lang/core has a bug with foldlUnits
-                |> Test.skip
             , Test.test "in {-| module doc comment -}"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
@@ -648,7 +646,7 @@ tests =
                                 "gren-version": "0.6.3 <= v < 0.7.0",
                                 "exposed-modules": [ "A" ],
                                 "dependencies": {
-                                    "gren-lang/core": "7.4.0 <= v < 8.0.0"
+                                    "gren-lang/core": "7.4.1 <= v < 8.0.0"
                                 }
                             }
                             """
