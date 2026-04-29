@@ -393,17 +393,27 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                     (\directDependencies modules extraFileSources ->
                         { modules =
                             modules
-                                |> Array.map
+                                |> Array.mapAndKeepJust
                                     (\module_ ->
-                                        { path =
-                                            module_.path
-                                                |> FileSystem.Path.toPosixString
-                                                -- hacky solution to get the path
-                                                -- relative to the projectToAnalyzePath
-                                                |> String.dropFirst
-                                                    ((projectToAnalyzePath |> FileSystem.Path.toPosixString |> String.count) + 1)
-                                        , source = module_.source
-                                        }
+                                        let
+                                            modulePosixPath : String
+                                            modulePosixPath =
+                                                module_.path
+                                                    |> FileSystem.Path.toPosixString
+                                        in
+                                        if modulePosixPath |> String.endsWith ".gren" then
+                                            Just
+                                                { path =
+                                                    modulePosixPath
+                                                        -- hacky solution to get the path
+                                                        -- relative to the projectToAnalyzePath
+                                                        |> String.dropFirst
+                                                            ((projectToAnalyzePath |> FileSystem.Path.toPosixString |> String.count) + 1)
+                                                , source = module_.source
+                                                }
+                                        
+                                        else
+                                            Nothing
                                     ) 
                         , grenJson = grenJson
                         , directDependencies = directDependencies
