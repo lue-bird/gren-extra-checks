@@ -1830,7 +1830,11 @@ underMismatch error under =
             ++ (under.under |> formatSourceCode)
             ++ "\n\nbut I found it under\n\n  "
             ++ (under.errorSourceInRegion |> formatSourceCode)
-            ++ "\n\nHint: Maybe you're passing the region of a wrong Located value to the check error?"
+            ++ "\n\nstarting at row "
+            ++ (error.region.start.row |> String.fromInt)
+            ++ ", column "
+            ++ (error.region.start.col |> String.fromInt)
+            ++ ".\n\nHint: Maybe you're passing the region of a wrong Located value to the check error?"
         )
 
 
