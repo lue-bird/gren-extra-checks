@@ -4,7 +4,7 @@
     "name": "lue-bird/gren-extra-checks",
     "summary": "enforce additional reliability and consistency constraints",
     "license": "BSD-3-Clause",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "exposed-modules": [
         "ExtraCheck",
         "ExtraChecksRunnerNode",
