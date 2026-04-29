@@ -700,6 +700,23 @@ tests =
                     }
                         |> ExtraCheck.expectToReport []
                 )
+            , Test.test "module-defined variable is used as infix function name"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing ((++))
+                                infix right 5 (++) = usedVariable
+                                usedVariable = Array.append
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
             , Test.test "module-defined variable is used only in other module via explicit import expose"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal

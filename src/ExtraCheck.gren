@@ -1312,10 +1312,15 @@ parseModules moduleFiles =
                     moduleUnparsed.source
                         |> String.Parser.Advanced.run moduleAndCommentsParser Compiler.Parse.Context.empty
                 is
-                    Err _ ->
+                    Err error ->
                         Err
                             (Array.Builder.pushLast
-                                (moduleFailedToParse { path = moduleUnparsed.path })
+                                (moduleFailedToParse
+                                    { path = moduleUnparsed.path
+                                    , source = moduleUnparsed.source
+                                    , error = error
+                                    }
+                                )
                                 (when soFar is
                                     Ok _ ->
                                         Array.Builder.empty 1
@@ -1360,13 +1365,20 @@ moduleAndCommentsParser =
         |> String.Parser.Advanced.keep String.Parser.Advanced.getPayload
 
 
-moduleFailedToParse : { path : String } -> String
+moduleFailedToParse :
+    { path : String
+    , source : String
+    , error : Array.Array (String.Parser.Advanced.DeadEnd Compiler.Parse.Context.Context Compiler.Parse.Module.Error) 
+    }
+    -> String
 moduleFailedToParse file =
     failureMessage "module failed to parse"
         ("I could not parse the provided gren module source code at path "
             ++ file.path
-            ++ ".\n\n"
-            ++ "Hint: Maybe you forgot to add the module definition at the top, like module A exposing (a)"
+            ++ ":\n\n"
+            ++ (file.error |> Compiler.Parse.Module.errorsToString file.source)
+            ++ "\n\n"
+            ++ "Hint: Maybe you forgot to add the module definition at the top, like module A exposing (a)?\nOtherwise, you can try moving this code into a gren file and see if the real gren compiler has a more helpful error message for you."
         )
 
 
