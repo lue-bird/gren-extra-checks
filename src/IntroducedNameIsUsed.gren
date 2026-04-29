@@ -583,7 +583,7 @@ inspectModule module_ =
                                     patternVariablesSoFar
                                         |> unusedLocalVariablesAdd name
                                             origin
-                                            (moduleVariable.value.value.body |> expressionRegion)
+                                            (moduleVariable.value.value.body |> ExtraCheck.locatedRegion)
                                 )
                                 soFar
                                 moduleVariable.value.value.args
@@ -1451,7 +1451,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
         Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
             ExtraCheck.patternArrayVariablesFold
                 (\name origin soFar ->
-                    soFar |> unusedLocalVariablesAdd name origin (result |> expressionRegion)
+                    soFar |> unusedLocalVariablesAdd name origin (result |> ExtraCheck.locatedRegion)
                 )
                 initialUnusedLocalVariables
                 parameters
@@ -1509,7 +1509,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                                 patternVariablesSoFar
                                                     |> unusedLocalVariablesAdd name
                                                         origin
-                                                        (parentExpression |> expressionRegion)
+                                                        (parentExpression |> ExtraCheck.locatedRegion)
                                             )
                                             soFar
                                             destruct.pattern
@@ -1520,12 +1520,12 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                                 (ExtraCheck.OriginLetDefineVariable
                                                     { variableDefine =
                                                         { start = def.start, end = def.end, value = define }
-                                                    , outerLetRegion = parentExpression |> expressionRegion
+                                                    , outerLetRegion = parentExpression |> ExtraCheck.locatedRegion
                                                     , outerLetAllDefs = letIn.defs
                                                     , outerLetBody = letIn.body
                                                     }
                                                 )
-                                                (parentExpression |> expressionRegion)
+                                                (parentExpression |> ExtraCheck.locatedRegion)
                             )
                             initialUnusedLocalVariables
             in
@@ -1543,7 +1543,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                         patternVariablesSoFar
                                             |> unusedLocalVariablesAdd name
                                                 origin
-                                                (define.body |> expressionRegion)
+                                                (define.body |> ExtraCheck.locatedRegion)
                                     )
                                     soFar
                                     define.args
@@ -1560,7 +1560,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                 patternVariablesSoFar
                                     |> unusedLocalVariablesAdd name
                                         origin
-                                        (case.body |> expressionRegion)
+                                        (case.body |> ExtraCheck.locatedRegion)
                             )
                             soFar
                             case.pattern
@@ -1695,15 +1695,6 @@ regionIncludes positionToCheck region =
            )
 
 
-{-| Hacky workaround for https://github.com/gren-lang/compiler-common/issues/5
-
-Replace with ExtraCheck.locatedRegion once fixed.
--}
-expressionRegion : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Region
-expressionRegion expression =
-    { start = expression |> expressionStart, end = expression.end }
-
-
 moduleDeclarationRegionIncludingDocs : Compiler.Ast.Source.ModuleDeclaration declaration -> Compiler.SourcePosition.Region
 moduleDeclarationRegionIncludingDocs moduleDeclaration =
     when moduleDeclaration.value.docs is
@@ -1712,22 +1703,6 @@ moduleDeclarationRegionIncludingDocs moduleDeclaration =
 
         Just docs ->
             { start = docs.start, end = moduleDeclaration.end }
-
-
-expressionStart : Compiler.Ast.Source.Expression -> Compiler.SourcePosition.Position
-expressionStart expression =
-    when expression.value is
-        Compiler.Ast.Source.Access recordAccess ->
-            expressionStart recordAccess.expression
-        
-        Compiler.Ast.Source.Binops operation ->
-            expressionStart operation.left
-        
-        Compiler.Ast.Source.Call call ->
-            expressionStart call.fn
-        
-        _ ->
-            expression.start
 
 
 sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
