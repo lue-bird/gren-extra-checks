@@ -480,7 +480,15 @@ inspectModule module_ =
                                         soFarAcrossModuleVariables
                                 )
                     )
-                    Dict.empty
+                    (module_.syntax.binops
+                        |> Array.foldl
+                            (\infixDeclaration soFar ->
+                                soFar
+                                    |> dictSetSet module_.syntax.name.value
+                                        infixDeclaration.value.fn
+                            )
+                            Dict.empty
+                    )
 
         usedTypesIncludingUnqualifiedFromExposingAll : Dict.Dict String (Set.Set String)
         usedTypesIncludingUnqualifiedFromExposingAll =
