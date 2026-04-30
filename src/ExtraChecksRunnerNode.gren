@@ -1383,7 +1383,7 @@ errorsReceived { stdout } { projectFilesByPath, errors } =
                 |> Task.andThen
                     (\{} ->
                         Stream.Log.line stdout
-                            "\nApply these edits by pressing y. Reject by pressing n"
+                            "\nApply these edits by pressing y. Reject by pressing n. Stop by pressing ctrl+c."
                     )
 
 
