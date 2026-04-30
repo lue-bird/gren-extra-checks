@@ -1372,8 +1372,11 @@ errorsReceived :
 errorsReceived { stdout } { projectFilesByPath, errors } =
     when errors is
         AllUnfixable unfixableErrors ->
-            Stream.Log.string stdout
-                (Ansi.clear ++ (unfixableErrors |> checkErrorsToString isAnsi projectFilesByPath))
+            Stream.Log.line stdout
+                (Ansi.clear
+                    ++ (unfixableErrors |> checkErrorsToString isAnsi projectFilesByPath)
+                    ++ "Watching for changes... To stop, press ctrl+c"
+                )
 
         Fixable { fixable, otherErrors = _ } ->
             Stream.Log.line stdout
