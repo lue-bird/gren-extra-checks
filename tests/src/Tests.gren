@@ -752,6 +752,67 @@ tests =
                     }
                         |> ExtraCheck.expectToReport []
                 )
+            , Test.test "module-defined variable is used as cmd effects manager function name"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                effect module A where { command = MyCmd } exposing (main)
+                                main = ""
+                                cmdMap = identity
+                                init = identity
+                                onEffects _router = identity
+                                onSelfMsg = identity
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used as sub effects manager function name"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                effect module A where { subscription = MySub } exposing (main)
+                                main = ""
+                                subMap = identity
+                                init = identity
+                                onEffects _router = identity
+                                onSelfMsg = identity
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used as sub+cmd effects manager function name"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                effect module A where { command = MyCmd, subscription = MySub } exposing (main)
+                                main = ""
+                                subMap = identity
+                                cmdMap = identity
+                                init = identity
+                                onEffects _router = identity
+                                onSelfMsg = identity
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
             , Test.test "module-defined variable is used only in other module via explicit import expose"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal

@@ -487,7 +487,29 @@ inspectModule module_ =
                                     |> dictSetSet module_.syntax.name.value
                                         infixDeclaration.value.fn
                             )
-                            Dict.empty
+                            (when module_.syntax.effects is
+                                Compiler.Ast.Source.NoEffects ->
+                                    Dict.empty
+                                
+                                Compiler.Ast.Source.Manager manager ->
+                                    Dict.singleton module_.syntax.name.value
+                                        ((when manager is
+                                            Compiler.Ast.Source.Sub _ ->
+                                                Set.singleton "subMap"
+                                            Compiler.Ast.Source.Cmd _ ->
+                                                Set.singleton "cmdMap"
+                                            Compiler.Ast.Source.Fx _ ->
+                                                Set.singleton "subMap"
+                                                    |> Set.set "cmdMap"
+                                         )
+                                            |> Set.set "init"
+                                            |> Set.set "onEffects"
+                                            |> Set.set "onSelfMsg"
+                                        )
+                                
+                                Compiler.Ast.Source.Ports _ ->
+                                    Dict.empty
+                            )
                     )
 
         usedTypesIncludingUnqualifiedFromExposingAll : Dict.Dict String (Set.Set String)

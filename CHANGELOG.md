@@ -1,3 +1,7 @@
+#### 2.0.2
+- `IntroducedNameIsUsed`:
+    - consider special effects manager functions like `cmdMap` as used
+
 #### 2.0.1
 - `ExtraChecksRunnerNode`: ignore js source files in project source directories, enabling use for `gren-lang/core`. Fixes https://github.com/lue-bird/gren-extra-checks/issues/1
 - `IntroducedNameIsUsed`:
