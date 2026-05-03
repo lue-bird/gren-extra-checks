@@ -947,7 +947,7 @@ tests =
                     }
                         |> ExtraCheck.expectToReport []
                 )
-            , Test.test "module-defined variable is used only in kernel js import"
+            , Test.test "module-defined variable is used only in kernel js import (no import alias, single expose)"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
@@ -976,6 +976,45 @@ tests =
 
                                 function example() {
                                     _A_usedVariable
+                                }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
+            , Test.test "module-defined variable is used only in kernel js import (import alias, multiple exposes)"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = something
+                                something = Integer 0
+                                type Integer = Integer Int
+                                usedVariable = Array.append
+                                """
+                          }
+                        , { path = "src/Gren/Kernel/A.js"
+                          , source =
+                                """
+                                /*
+
+                                import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
+                                import HttpClient exposing (BadUrl, Timeout, BadStatus, BadHeaders, UnexpectedResponseBody, UnknownError, SentChunk, ReceivedChunk, Error, Aborted, Done)
+                                import Json.Decode as Decode exposing (decodeString, errorToString)
+                                import Result exposing (isOk)
+                                import Maybe exposing (isJust)
+                                import Dict exposing (empty, set, foldl)
+                                import A as Alias exposing (main, Integer, usedVariable, something)
+
+                                */
+
+                                function example() {
+                                    _Alias_usedVariable
                                 }
                                 """
                           }

@@ -703,7 +703,7 @@ inspectExtraFile extraFile =
                                                     (line
                                                         |> String.slice
                                                             ("import " |> String.unitLength)
-                                                            moduleNameEndOffset
+                                                            (line |> String.firstIndexOf " as" |> Maybe.withDefault moduleNameEndOffset)
                                                     )
                                                     (line
                                                         |> String.dropFirst
