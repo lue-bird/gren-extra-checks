@@ -947,6 +947,43 @@ tests =
                     }
                         |> ExtraCheck.expectToReport []
                 )
+            , Test.test "module-defined variable is used only in kernel js import"
+                (\{} ->
+                    { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
+                    , files =
+                        [ { path = "src/A.gren"
+                          , source =
+                                """
+                                module A exposing (main)
+                                main = ""
+                                usedVariable = Array.append
+                                """
+                          }
+                        , { path = "src/Gren/Kernel/A.js"
+                          , source =
+                                """
+                                /*
+
+                                import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
+                                import HttpClient exposing (BadUrl, Timeout, BadStatus, BadHeaders, UnexpectedResponseBody, UnknownError, SentChunk, ReceivedChunk, Error, Aborted, Done)
+                                import Json.Decode as Decode exposing (decodeString, errorToString)
+                                import Result exposing (isOk)
+                                import Maybe exposing (isJust)
+                                import Dict exposing (empty, set, foldl)
+                                import A exposing (usedVariable)
+
+                                */
+
+                                function example() {
+                                    _A_usedVariable
+                                }
+                                """
+                          }
+                        ]
+                    , check = IntroducedNameIsUsed.check
+                    }
+                        |> ExtraCheck.expectToReport []
+                )
             , Test.test "module-defined variable not used even though it is explicitly imported exposing (..)"
                 (\{} ->
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal

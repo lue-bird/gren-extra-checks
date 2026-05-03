@@ -2,6 +2,9 @@
 - `IntroducedNameIsUsed`:
     - do not consider only-self-referential variables and choice types as used
     - consider special effects manager functions like `cmdMap` as used
+    - consider variable names only imported from kernel js as used.
+      This requires adding `Gren/Kernel` to `extraPaths`.
+      Variant names declared in elm but only used in js code are considered unused. There is no reason to define these in elm instead of js directly
 
 #### 2.0.1
 - `ExtraChecksRunnerNode`: ignore js source files in project source directories, enabling use for `gren-lang/core`. Fixes https://github.com/lue-bird/gren-extra-checks/issues/1

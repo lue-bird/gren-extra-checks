@@ -54,7 +54,7 @@ check =
     ExtraCheck.create
         { inspectModule = inspectModule
         , inspectGrenJson = inspectGrenJson
-        , inspectExtraFile = \_ -> knowledgeNone
+        , inspectExtraFile = inspectExtraFile
         , inspectDirectDependencies = inspectDirectDependencies
         , knowledgeMerge = knowledgeMerge
         , report = report
@@ -172,17 +172,17 @@ knowledgeMerge a b =
 
 inspectGrenJson : { source : String, outline : Compiler.Outline.Outline } -> Knowledge
 inspectGrenJson grenJson =
-        { knowledgeNone
-        | grenJsonSource = Just grenJson.source
-        , exposedModules =
-            when grenJson.outline is
-                Compiler.Outline.App _ ->
-                    Set.empty
+    { knowledgeNone
+    | grenJsonSource = Just grenJson.source
+    , exposedModules =
+        when grenJson.outline is
+            Compiler.Outline.App _ ->
+                Set.empty
 
-                Compiler.Outline.Pkg packageOutline ->
-                    packageOutline.exposedModules
-                        |>  ExtraCheck.outlineExposedModuleNameSet
-        }
+            Compiler.Outline.Pkg packageOutline ->
+                packageOutline.exposedModules
+                    |>  ExtraCheck.outlineExposedModuleNameSet
+    }
 
 
 inspectDirectDependencies :
@@ -675,6 +675,70 @@ inspectModule module_ =
                 }
     }
 
+
+inspectExtraFile : { path : String, source : String } -> Knowledge
+inspectExtraFile extraFile =
+    if
+        (extraFile.path |> String.endsWith ".js")
+            && (extraFile.source |> String.startsWith "/*")
+    then
+        when extraFile.source |> String.firstIndexOf "*/" is
+            Just commentEndOffset ->
+                { grenJsonSource = Nothing
+                , directDependencyExposedModules = Dict.empty
+                , exposedModules = Set.empty
+                , moduleInfos = Dict.empty
+                , usedTypeNames = Dict.empty
+                , usedVariableNames =
+                    extraFile.source
+                        |> String.takeFirst commentEndOffset
+                        |> String.lines
+                        |> Array.foldl
+                            (\line soFarAcrossImports ->
+                                when line |> String.firstIndexOf " exposing (" is
+                                    Just moduleNameEndOffset ->
+                                        if line |> String.startsWith "import " then
+                                            soFarAcrossImports
+                                                |> Dict.set
+                                                    (line
+                                                        |> String.slice
+                                                            ("import " |> String.unitLength)
+                                                            moduleNameEndOffset
+                                                    )
+                                                    (line
+                                                        |> String.dropFirst
+                                                            (moduleNameEndOffset + (" exposing (" |> String.unitLength))
+                                                        |> String.dropLast 1 -- trailing )
+                                                        |> String.split ", "
+                                                        |> Array.foldl
+                                                            (\expose setSoFar ->
+                                                                if
+                                                                    expose
+                                                                        |> String.getUnit 0
+                                                                        |> Maybe.checkValue (\first -> first |> Char.isLower)
+                                                                then
+                                                                    setSoFar |> Set.set expose
+                                                                
+                                                                else
+                                                                    setSoFar
+                                                            )
+                                                            Set.empty
+                                                    )
+
+                                        else
+                                            soFarAcrossImports
+                                    
+                                    Nothing ->
+                                        soFarAcrossImports
+                            )
+                            Dict.empty
+                , modulesImportingExposingAll = Dict.empty
+                }
+            
+            Nothing ->
+                knowledgeNone
+    else
+        knowledgeNone
 
 
 report : Knowledge -> Array ExtraCheck.Error
