@@ -1,10 +1,9 @@
 module ElementAndHtmlStyledNotUsedInSameModule exposing (check)
 
-
-import Compiler.SourcePosition
-import ExtraCheck
-import Dict exposing (Dict)
 import Array.Builder
+import Compiler.SourcePosition
+import Dict exposing (Dict)
+import ExtraCheck
 
 
 check : ExtraCheck.Check

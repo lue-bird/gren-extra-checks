@@ -1,8 +1,7 @@
 module Main exposing (main)
 
-
-import Tests
 import Test.Runner.Node
+import Tests
 
 
 main : Test.Runner.Node.Program

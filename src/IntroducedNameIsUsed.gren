@@ -3,20 +3,19 @@ module IntroducedNameIsUsed exposing (check)
 {-| Report unused declared names.
 
 @docs check
-
 -}
 
-import ExtraCheck
-import Dict
-import Compiler.Ast.Source
-import DictLocalExtra
-import Compiler.SourcePosition
 import Array.Builder
-import Compiler.Parse.Context
-import Set
+import Compiler.Ast.Source
+import Compiler.ModuleName
 import Compiler.Outline
 import Compiler.PackageName
-import Compiler.ModuleName
+import Compiler.Parse.Context
+import Compiler.SourcePosition
+import Dict
+import DictLocalExtra
+import ExtraCheck
+import Set
 
 
 {-| Report unused module-defined variables, ports, type aliases,
@@ -76,7 +75,8 @@ type alias Knowledge =
             { path : String
             , exposing_ : Compiler.Ast.Source.Exposing
             , importsWithExplicitExposes :
-                Dict.Dict String
+                Dict.Dict
+                    String
                     { region : Compiler.SourcePosition.Region
                     , alias : Maybe String
                     , exposes : Array Compiler.Ast.Source.Exposed
@@ -148,7 +148,7 @@ knowledgeMerge a b =
         when a.grenJsonSource is
             Nothing ->
                 b.grenJsonSource
-            
+
             Just _ as justGrenJsonSource ->
                 justGrenJsonSource
     , directDependencyExposedModules =
@@ -181,7 +181,7 @@ inspectGrenJson grenJson =
 
             Compiler.Outline.Pkg packageOutline ->
                 packageOutline.exposedModules
-                    |>  ExtraCheck.outlineExposedModuleNameSet
+                    |> ExtraCheck.outlineExposedModuleNameSet
     }
 
 
@@ -238,7 +238,7 @@ inspectModule module_ =
             module_.syntax.imports
                 |> Array.foldl
                     (\import_ soFarAcrossImports ->
-                        let 
+                        let
                             soFarWithExposing =
                                 when import_.value.expose is
                                     Compiler.Ast.Source.Open ->
@@ -250,7 +250,7 @@ inspectModule module_ =
                                         , exposingAll =
                                             soFarAcrossImports.exposingAll |> Set.set import_.value.module_.value
                                         }
-                                    
+
                                     Compiler.Ast.Source.Explicit exposes ->
                                         exposes
                                             |> Array.foldl
@@ -259,15 +259,17 @@ inspectModule module_ =
                                                         Compiler.Ast.Source.ExposedLower exposedVariableName ->
                                                             { exposedVariableNames =
                                                                 withExposesSoFar.exposedVariableNames
-                                                                     |> Dict.set exposedVariableName.value import_.value.module_.value
+                                                                    |> Dict.set exposedVariableName.value import_.value.module_.value
                                                             , exposedTypeNames = withExposesSoFar.exposedTypeNames
                                                             , exposingChoiceTypesExposingAllVariants = withExposesSoFar.exposingChoiceTypesExposingAllVariants
                                                             , byAlias = withExposesSoFar.byAlias
                                                             , exposingAll = withExposesSoFar.exposingAll
                                                             , withExplicitExposes = withExposesSoFar.withExplicitExposes
                                                             }
+
                                                         Compiler.Ast.Source.ExposedOperator _ ->
                                                             withExposesSoFar
+
                                                         Compiler.Ast.Source.ExposedUpper { name = exposedTypeName, privacy } ->
                                                             { exposedTypeNames =
                                                                 withExposesSoFar.exposedTypeNames
@@ -322,7 +324,7 @@ inspectModule module_ =
                     , exposingAll = Set.empty
                     , withExplicitExposes = Dict.empty
                     }
-        
+
         moduleTypeInfos =
             module_.syntax.aliases
                 |> Array.foldl
@@ -377,10 +379,10 @@ inspectModule module_ =
                     (when module_.syntax.effects is
                         Compiler.Ast.Source.NoEffects ->
                             Dict.empty
-                        
+
                         Compiler.Ast.Source.Manager _ ->
                             Dict.empty
-                        
+
                         Compiler.Ast.Source.Ports ports ->
                             let
                                 modulePortKeywordStart =
@@ -403,7 +405,7 @@ inspectModule module_ =
                                     )
                                     Dict.empty
                     )
-        
+
         variableReferenceToModuleOrigin : { qualification : String, name : String } -> String
         variableReferenceToModuleOrigin reference =
             -- this does not take implicit imports into account.
@@ -419,7 +421,7 @@ inspectModule module_ =
                            )
                 then
                     module_.syntax.name.value
-                
+
                 else
                     when imports.exposedVariableNames |> Dict.get reference.name is
                         Just originModuleName ->
@@ -434,11 +436,11 @@ inspectModule module_ =
                 when imports.byAlias |> Dict.get reference.qualification is
                     Just originModuleName ->
                         originModuleName
-                    
+
                     Nothing ->
                         -- qualification = module name
                         reference.qualification
-        
+
         typeReferenceToModuleOrigin : { qualification : String, name : String } -> String
         typeReferenceToModuleOrigin reference =
             -- this does not take implicit imports into account.
@@ -446,7 +448,7 @@ inspectModule module_ =
             if reference.qualification |> String.isEmpty then
                 if moduleTypeInfos |> Dict.member reference.name then
                     module_.syntax.name.value
-                
+
                 else
                     when imports.exposedTypeNames |> Dict.get reference.name is
                         Just originModuleName ->
@@ -461,11 +463,11 @@ inspectModule module_ =
                 when imports.byAlias |> Dict.get reference.qualification is
                     Just originModuleName ->
                         originModuleName
-                    
+
                     Nothing ->
                         -- qualification = module name
                         reference.qualification
-        
+
         usedVariablesIncludingUnqualifiedFromExposingAll : Dict.Dict String (Set.Set String)
         usedVariablesIncludingUnqualifiedFromExposingAll =
             module_.syntax.values
@@ -480,7 +482,7 @@ inspectModule module_ =
                                     if reference.qualification == "" && reference.name == moduleVariable.value.value.name.value then
                                         -- self-reference
                                         soFar
-                                    
+
                                     else
                                         soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
                                 )
@@ -502,14 +504,16 @@ inspectModule module_ =
                             (when module_.syntax.effects is
                                 Compiler.Ast.Source.NoEffects ->
                                     Dict.empty
-                                
+
                                 Compiler.Ast.Source.Manager manager ->
                                     Dict.singleton module_.syntax.name.value
                                         ((when manager is
                                             Compiler.Ast.Source.Sub _ ->
                                                 Set.singleton "subMap"
+
                                             Compiler.Ast.Source.Cmd _ ->
                                                 Set.singleton "cmdMap"
+
                                             Compiler.Ast.Source.Fx _ ->
                                                 Set.singleton "subMap"
                                                     |> Set.set "cmdMap"
@@ -518,7 +522,7 @@ inspectModule module_ =
                                             |> Set.set "onEffects"
                                             |> Set.set "onSelfMsg"
                                         )
-                                
+
                                 Compiler.Ast.Source.Ports _ ->
                                     Dict.empty
                             )
@@ -545,7 +549,9 @@ inspectModule module_ =
                                         |> Array.foldl
                                             (\variant soFarAcrossVariants ->
                                                 when variant.value.payload is
-                                                    Nothing -> soFarAcrossVariants
+                                                    Nothing ->
+                                                        soFarAcrossVariants
+
                                                     Just variantValue ->
                                                         variantValue.value
                                                             |> typeReferencesFold
@@ -553,7 +559,7 @@ inspectModule module_ =
                                                                     if reference.qualification == "" && reference.name == choiceType.value.value.name.value then
                                                                         -- self-reference
                                                                         soFar
-                                                                    
+
                                                                     else
                                                                         soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
                                                                 )
@@ -567,10 +573,10 @@ inspectModule module_ =
                         when module_.syntax.effects is
                             Compiler.Ast.Source.NoEffects ->
                                 typeNames
-                            
+
                             Compiler.Ast.Source.Manager _ ->
                                 typeNames
-                            
+
                             Compiler.Ast.Source.Ports ports ->
                                 ports
                                     |> Array.foldl
@@ -593,6 +599,7 @@ inspectModule module_ =
                                             (when moduleVariable.value.value.signature is
                                                 Nothing ->
                                                     soFarAcrossModuleVariables
+
                                                 Just signature ->
                                                     signature.type_.value
                                                         |> typeReferencesFold
@@ -620,9 +627,14 @@ inspectModule module_ =
                     + (module_.syntax.unions |> Array.length)
                     + (module_.syntax.binops |> Array.length)
                     + (when module_.syntax.effects is
-                            Compiler.Ast.Source.NoEffects -> 0
-                            Compiler.Ast.Source.Manager _ -> 0
-                            Compiler.Ast.Source.Ports ports -> ports |> Array.length
+                        Compiler.Ast.Source.NoEffects ->
+                            0
+
+                        Compiler.Ast.Source.Manager _ ->
+                            0
+
+                        Compiler.Ast.Source.Ports ports ->
+                            ports |> Array.length
                       )
             , types = moduleTypeInfos
             , variables = moduleVariableInfos
@@ -658,7 +670,7 @@ inspectModule module_ =
                    )
         then
             Dict.empty
-        
+
         else
             Dict.singleton module_.path
                 { importedModulesExposingChoiceTypesExposingAllVariants =
@@ -708,7 +720,8 @@ inspectExtraFile extraFile =
                                                     (line
                                                         |> String.dropFirst
                                                             (moduleNameEndOffset + (" exposing (" |> String.unitLength))
-                                                        |> String.dropLast 1 -- trailing )
+                                                        |> -- trailing )
+                                                           String.dropLast 1
                                                         |> String.split ", "
                                                         |> Array.foldl
                                                             (\expose setSoFar ->
@@ -718,7 +731,7 @@ inspectExtraFile extraFile =
                                                                         |> Maybe.checkValue (\first -> first |> Char.isLower)
                                                                 then
                                                                     setSoFar |> Set.set expose
-                                                                
+
                                                                 else
                                                                     setSoFar
                                                             )
@@ -727,16 +740,17 @@ inspectExtraFile extraFile =
 
                                         else
                                             soFarAcrossImports
-                                    
+
                                     Nothing ->
                                         soFarAcrossImports
                             )
                             Dict.empty
                 , modulesImportingExposingAll = Dict.empty
                 }
-            
+
             Nothing ->
                 knowledgeNone
+
     else
         knowledgeNone
 
@@ -762,10 +776,10 @@ report knowledge =
                                                 when moduleOriginExpose is
                                                     Compiler.Ast.Source.ExposedUpper moduleOriginExposedType ->
                                                         name == moduleOriginExposedType.name.value
-                                                    
+
                                                     Compiler.Ast.Source.ExposedLower _ ->
                                                         False
-                                                    
+
                                                     Compiler.Ast.Source.ExposedOperator _ ->
                                                         False
                                             )
@@ -779,7 +793,7 @@ report knowledge =
                                 )
                                     && (moduleImportingExposingAll.typeNameUses
                                             |> Set.member name
-                                        )
+                                       )
                             )
                    )
 
@@ -799,13 +813,13 @@ report knowledge =
                                     moduleOriginExposes
                                         |> Array.any
                                             (\moduleOriginExpose ->
-                                                when moduleOriginExpose is                                                    
+                                                when moduleOriginExpose is
                                                     Compiler.Ast.Source.ExposedLower moduleOriginExposedVariable ->
                                                         name == moduleOriginExposedVariable.value
 
                                                     Compiler.Ast.Source.ExposedUpper _ ->
                                                         False
-                                                    
+
                                                     Compiler.Ast.Source.ExposedOperator _ ->
                                                         False
                                             )
@@ -822,7 +836,7 @@ report knowledge =
                                        )
                             )
                    )
-        
+
         variantNameIsUsed :
             Compiler.Ast.Source.Exposing
             -> { typeOrigin : String, moduleOrigin : String, name : String }
@@ -844,7 +858,7 @@ report knowledge =
                                        )
                             )
                    )
-        
+
         directDependencyModuleNameIsUsed : Compiler.ModuleName.ModuleName -> Bool
         directDependencyModuleNameIsUsed directDependencyModuleName =
             let
@@ -875,7 +889,7 @@ report knowledge =
                            )
                 then
                     soFar
-                
+
                 else
                     soFar
                         |> Array.Builder.pushLast
@@ -933,6 +947,7 @@ report knowledge =
                                                   }
                                                 ]
                                             }
+
                                         ExtraCheck.OriginPatternPunnedField punnedFieldRegion ->
                                             { path = moduleInfo.path
                                             , message = "punned pattern field " ++ localVariable.name ++ " is never referenced"
@@ -945,6 +960,7 @@ report knowledge =
                                                   }
                                                 ]
                                             }
+
                                         ExtraCheck.OriginLetDefineVariable originLetDefine ->
                                             { path = moduleInfo.path
                                             , message = "let-defined variable " ++ localVariable.name ++ " is never referenced"
@@ -953,7 +969,7 @@ report knowledge =
                                                 "Use this variable or remove the let define. Alternatively, if you want to keep a value around for debugging, assign it to _ to explicitly ignore it."
                                             , fix =
                                                 [ { path = moduleInfo.path
-                                                    , edits =
+                                                  , edits =
                                                         if (originLetDefine.outerLetAllDefs |> Array.length) == 1 then
                                                             -- remove the full let .. in part before the body
                                                             [ ExtraCheck.removeRegion
@@ -961,12 +977,13 @@ report knowledge =
                                                                 , end = originLetDefine.outerLetBody.start
                                                                 }
                                                             ]
+
                                                         else
                                                             -- remove only the one let define
                                                             [ ExtraCheck.removeRegion
                                                                 (originLetDefine.variableDefine |> ExtraCheck.locatedRegion)
                                                             ]
-                                                    }
+                                                  }
                                                 ]
                                             }
                                     )
@@ -1023,7 +1040,8 @@ unusedTypeError :
         | path : String
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
-            Dict.Dict String
+            Dict.Dict
+                String
                 { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
@@ -1035,7 +1053,8 @@ unusedTypeError :
         | path : String
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
-            Dict.Dict String
+            Dict.Dict
+                String
                 { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
@@ -1051,7 +1070,7 @@ unusedTypeError :
         }
     -> ExtraCheck.Error
 unusedTypeError moduleHeaders originModuleHeader originModuleName typeName typeNameOrigin =
-    let                                            
+    let
         errorRemoveTypeDeclarationWithAdditionalModuleEdit : Maybe ExtraCheck.SourceEdit -> ExtraCheck.Error
         errorRemoveTypeDeclarationWithAdditionalModuleEdit maybeAdditionalModuleEdit =
             { path = originModuleHeader.path
@@ -1080,7 +1099,7 @@ unusedTypeError moduleHeaders originModuleHeader originModuleName typeName typeN
                             is
                                 Nothing ->
                                     fixesSoFar
-                                
+
                                 Just originModuleImport ->
                                     when originModuleImport.exposes |> exposingRemoveTypeEdit typeName is
                                         Nothing ->
@@ -1092,11 +1111,15 @@ unusedTypeError moduleHeaders originModuleHeader originModuleName typeName typeN
                                                     { path = moduleHeader.path
                                                     , edits =
                                                         [ ExtraCheck.replaceRegion originModuleImport.region
-                                                            ("import " ++ originModuleName
+                                                            ("import "
+                                                                ++ originModuleName
                                                                 ++ (when originModuleImport.alias is
-                                                                        Nothing -> ""
-                                                                        Just alias -> " as " ++ alias
-                                                                )
+                                                                        Nothing ->
+                                                                            ""
+
+                                                                        Just alias ->
+                                                                            " as " ++ alias
+                                                                   )
                                                             )
                                                         ]
                                                     }
@@ -1148,7 +1171,8 @@ unusedModuleVariableError :
         | path : String
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
-            Dict.Dict String
+            Dict.Dict
+                String
                 { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
@@ -1160,7 +1184,8 @@ unusedModuleVariableError :
         | path : String
         , exposing_ : Compiler.Ast.Source.Exposing
         , importsWithExplicitExposes :
-            Dict.Dict String
+            Dict.Dict
+                String
                 { region : Compiler.SourcePosition.Region
                 , alias : Maybe String
                 , exposes : Array Compiler.Ast.Source.Exposed
@@ -1216,7 +1241,7 @@ unusedModuleVariableError moduleHeaders originModuleHeader variableOriginModule 
                             is
                                 Nothing ->
                                     fixesSoFar
-                                
+
                                 Just originModuleImport ->
                                     when originModuleImport.exposes |> exposingRemoveVariableEdit variableName is
                                         Nothing ->
@@ -1231,9 +1256,12 @@ unusedModuleVariableError moduleHeaders originModuleHeader variableOriginModule 
                                                             ("import "
                                                                 ++ variableOriginModule
                                                                 ++ (when originModuleImport.alias is
-                                                                        Nothing -> ""
-                                                                        Just alias -> " as " ++ alias
-                                                                    )
+                                                                        Nothing ->
+                                                                            ""
+
+                                                                        Just alias ->
+                                                                            " as " ++ alias
+                                                                   )
                                                             )
                                                         ]
                                                     }
@@ -1291,10 +1319,10 @@ exposingRemoveVariableEdit variableToRemove exposes =
                 (\originModuleExpose foundSoFar ->
                     when originModuleExpose is
                         Compiler.Ast.Source.ExposedLower originModuleExposedVariableName ->
-                            when foundSoFar is                                                                                    
+                            when foundSoFar is
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedVariableName.start }
 
@@ -1306,29 +1334,29 @@ exposingRemoveVariableEdit variableToRemove exposes =
                                                     |> Result.fromMaybe originModuleExposedVariableName.start
                                             , end = originModuleExposedVariableName.end
                                             }
-                                    
+
                                     else
-                                        Err (Just originModuleExposedVariableName.end)                                                                                
-                        
+                                        Err (Just originModuleExposedVariableName.end)
+
                         Compiler.Ast.Source.ExposedUpper { name = originModuleExposedTypeName, privacy = _ } ->
-                            when foundSoFar is                                                                                    
+                            when foundSoFar is
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedTypeName.start }
 
                                 Err _ ->
                                     Err (Just originModuleExposedTypeName.end)
-                        
+
                         Compiler.Ast.Source.ExposedOperator originModuleExposedOperator ->
                             when foundSoFar is
                                 Err _ ->
                                     Err (Just originModuleExposedOperator.end)
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedOperator.start }
-                                
+
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
                 )
@@ -1337,7 +1365,7 @@ exposingRemoveVariableEdit variableToRemove exposes =
         Err _ ->
             -- not exposed
             Nothing
-        
+
         Ok { start = Err _, end = _ } ->
             Just RemoveExposingEntirely
 
@@ -1356,21 +1384,21 @@ exposingRemoveTypeEdit typeToRemove exposes =
                 (\originModuleExpose foundSoFar ->
                     when originModuleExpose is
                         Compiler.Ast.Source.ExposedLower originModuleExposedVariableName ->
-                            when foundSoFar is                                                                                    
+                            when foundSoFar is
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedVariableName.start }
 
                                 Err _ ->
-                                    Err (Just originModuleExposedVariableName.end)                                                                                
-                        
+                                    Err (Just originModuleExposedVariableName.end)
+
                         Compiler.Ast.Source.ExposedUpper { name = originModuleExposedTypeName, privacy = _ } ->
-                            when foundSoFar is                                                                                    
+                            when foundSoFar is
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedTypeName.start }
 
@@ -1382,18 +1410,18 @@ exposingRemoveTypeEdit typeToRemove exposes =
                                                     |> Result.fromMaybe originModuleExposedTypeName.start
                                             , end = originModuleExposedTypeName.end
                                             }
-                                    
+
                                     else
                                         Err (Just originModuleExposedTypeName.end)
-                        
+
                         Compiler.Ast.Source.ExposedOperator originModuleExposedOperator ->
                             when foundSoFar is
                                 Err _ ->
                                     Err (Just originModuleExposedOperator.end)
-                                
+
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedOperator.start }
-                                
+
                                 Ok { start = Ok _, end = _ } as alreadyOk ->
                                     alreadyOk
                 )
@@ -1402,7 +1430,7 @@ exposingRemoveTypeEdit typeToRemove exposes =
         Err _ ->
             -- not exposed
             Nothing
-        
+
         Ok { start = Err _, end = _ } ->
             Just RemoveExposingEntirely
 
@@ -1436,7 +1464,7 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                 Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.CapVar, name = variable } ->
                     initialState
                         |> reduceWithReference { qualification = "", name = variable }
-                
+
                 Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
                     if localVariables |> Dict.member variable then
                         initialState
@@ -1444,14 +1472,14 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                     else
                         initialState
                             |> reduceWithReference { qualification = "", name = variable }
-                
+
                 Compiler.Ast.Source.VarQual { varType = _, qualifier = qualification, name } ->
                     initialState
                         |> reduceWithReference { qualification = qualification, name = name }
-                
+
                 Compiler.Ast.Source.Lambda { patterns, body = _ } ->
                     patterns |> patternArrayUsedVariantsFold reduceWithReference initialState
-                
+
                 Compiler.Ast.Source.When { expression = _, branches = cases } ->
                     cases
                         |> Array.foldl
@@ -1459,7 +1487,7 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                                 case.pattern |> patternUsedVariantsFold reduceWithReference soFar
                             )
                             initialState
-                
+
                 Compiler.Ast.Source.Let { defs, body = _ } ->
                     defs
                         |> Array.foldl
@@ -1467,12 +1495,12 @@ expressionUsedReferencesFoldExcludingLocalVariables localVariables reduceWithRef
                                 when def is
                                     Compiler.Ast.Source.Destruct destruct ->
                                         destruct.pattern |> patternUsedVariantsFold reduceWithReference soFar
-                                    
+
                                     Compiler.Ast.Source.Define define ->
                                         define.args |> patternArrayUsedVariantsFold reduceWithReference soFar
                             )
                             initialState
-                
+
                 _ ->
                     initialState
             )
@@ -1533,10 +1561,18 @@ unusedVariablesAddFromWithinExpression :
             }
 unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariables =
     when parentExpression.value is
-        Compiler.Ast.Source.NumberLiteral _ -> initialUnusedLocalVariables
-        Compiler.Ast.Source.CharLiteral _ -> initialUnusedLocalVariables
-        Compiler.Ast.Source.StringLiteral _ -> initialUnusedLocalVariables
-        Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.CapVar, name = _ } -> initialUnusedLocalVariables
+        Compiler.Ast.Source.NumberLiteral _ ->
+            initialUnusedLocalVariables
+
+        Compiler.Ast.Source.CharLiteral _ ->
+            initialUnusedLocalVariables
+
+        Compiler.Ast.Source.StringLiteral _ ->
+            initialUnusedLocalVariables
+
+        Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.CapVar, name = _ } ->
+            initialUnusedLocalVariables
+
         Compiler.Ast.Source.Var { varType = Compiler.Ast.Source.LowVar, name = variable } ->
             when
                 initialUnusedLocalVariables
@@ -1550,20 +1586,26 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
             is
                 Nothing ->
                     initialUnusedLocalVariables
-                
+
                 Just { key = localVariableOriginRegion } ->
                     initialUnusedLocalVariables
                         |> Dict.remove localVariableOriginRegion
+
         Compiler.Ast.Source.VarQual _ ->
             initialUnusedLocalVariables
+
         Compiler.Ast.Source.Accessor _ ->
             initialUnusedLocalVariables
+
         Compiler.Ast.Source.Operator _ ->
             initialUnusedLocalVariables
+
         Compiler.Ast.Source.Parens inParens ->
             initialUnusedLocalVariables |> unusedVariablesAddFromWithinExpression inParens
+
         Compiler.Ast.Source.Negate inNegation ->
             initialUnusedLocalVariables |> unusedVariablesAddFromWithinExpression inNegation
+
         Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
             ExtraCheck.patternArrayVariablesFold
                 (\name origin soFar ->
@@ -1572,18 +1614,22 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                 initialUnusedLocalVariables
                 parameters
                 |> unusedVariablesAddFromWithinExpression result
+
         Compiler.Ast.Source.Access { accessor = _, expression = record } ->
             initialUnusedLocalVariables |> unusedVariablesAddFromWithinExpression record
+
         Compiler.Ast.Source.ArrayLiteral elements ->
             elements
                 |> Array.foldl
                     (\element soFar -> soFar |> unusedVariablesAddFromWithinExpression element)
                     initialUnusedLocalVariables
+
         Compiler.Ast.Source.Record fields ->
             fields
                 |> Array.foldl
                     (\field soFar -> soFar |> unusedVariablesAddFromWithinExpression field.value)
                     initialUnusedLocalVariables
+
         Compiler.Ast.Source.Update recordUpdate ->
             recordUpdate.newValues
                 |> Array.foldl
@@ -1591,10 +1637,12 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                     (initialUnusedLocalVariables
                         |> unusedVariablesAddFromWithinExpression recordUpdate.record
                     )
+
         Compiler.Ast.Source.Binops { left = left, operator = _, right = right } ->
             initialUnusedLocalVariables
                 |> unusedVariablesAddFromWithinExpression left
                 |> unusedVariablesAddFromWithinExpression right
+
         Compiler.Ast.Source.If ifThenElse ->
             ifThenElse.branches
                 |> Array.foldl
@@ -1605,6 +1653,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                     )
                     initialUnusedLocalVariables
                 |> unusedVariablesAddFromWithinExpression ifThenElse.elseBranch
+
         Compiler.Ast.Source.Call call ->
             call.args
                 |> Array.foldl
@@ -1612,6 +1661,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                     (initialUnusedLocalVariables
                         |> unusedVariablesAddFromWithinExpression call.fn
                     )
+
         Compiler.Ast.Source.Let letIn ->
             let
                 localVariablesIncludingAcrossDefines =
@@ -1632,7 +1682,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
 
                                     Compiler.Ast.Source.Define define ->
                                         soFar
-                                            |> unusedLocalVariablesAdd define.name.value 
+                                            |> unusedLocalVariablesAdd define.name.value
                                                 (ExtraCheck.OriginLetDefineVariable
                                                     { variableDefine =
                                                         { start = def.start, end = def.end, value = define }
@@ -1653,6 +1703,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                                 soFar
                                     |> unusedVariablesAddFromWithinExpression
                                         destruct.body
+
                             Compiler.Ast.Source.Define define ->
                                 ExtraCheck.patternArrayVariablesFold
                                     (\name origin patternVariablesSoFar ->
@@ -1667,6 +1718,7 @@ unusedVariablesAddFromWithinExpression parentExpression initialUnusedLocalVariab
                     )
                     localVariablesIncludingAcrossDefines
                 |> unusedVariablesAddFromWithinExpression letIn.body
+
         Compiler.Ast.Source.When whenIs ->
             whenIs.branches
                 |> Array.foldl
@@ -1716,8 +1768,10 @@ unusedLocalVariablesAdd name origin scope soFar =
             when origin is
                 ExtraCheck.OriginPatternPunnedField fieldRegion ->
                     fieldRegion
+
                 ExtraCheck.OriginPatternVariable patternVariableRegion ->
                     patternVariableRegion
+
                 ExtraCheck.OriginLetDefineVariable letDefine ->
                     letDefine.variableDefine.value.name |> ExtraCheck.locatedRegion
     in
@@ -1727,7 +1781,7 @@ unusedLocalVariablesAdd name origin scope soFar =
 
 
 typeReferencesFold :
-    ({ qualification : String, name : String} -> state -> state)
+    ({ qualification : String, name : String } -> state -> state)
     -> state
     -> Compiler.Ast.Source.Type_
     -> state
@@ -1741,7 +1795,7 @@ typeReferencesFold reduceTypeReference into type_ =
 
                 Compiler.Ast.Source.TTypeQual { qualifier = qualification, name } ->
                     into |> reduceTypeReference { qualification = qualification, name = name }
-                
+
                 _ ->
                     into
             )
@@ -1756,13 +1810,14 @@ dictSetSet dictKey setKeyToInsert dict =
     when dict |> Dict.get dictKey is
         Nothing ->
             dict |> Dict.set dictKey (Set.singleton setKeyToInsert)
+
         Just setSoFar ->
             dict |> Dict.set dictKey (setSoFar |> Set.set setKeyToInsert)
 
 
 expressionTypeReferencesInto :
     Dict.Dict String (Set.Set String)
-    -> ({ qualification : String, name : String} -> String)
+    -> ({ qualification : String, name : String } -> String)
     -> Compiler.Ast.Source.Expression_
     -> Dict.Dict String (Set.Set String)
 expressionTypeReferencesInto into typeReferenceToModuleOrigin expression =
@@ -1775,7 +1830,7 @@ expressionTypeReferencesInto into typeReferenceToModuleOrigin expression =
                         |> Array.foldl
                             (\def soFarAcrossDefs ->
                                 when def.value is
-                                    Compiler.Ast.Source.Define { typeSignature = Just signature } ->    
+                                    Compiler.Ast.Source.Define { typeSignature = Just signature } ->
                                         signature.value
                                             |> typeReferencesFold
                                                 (\reference soFar ->
@@ -1787,6 +1842,7 @@ expressionTypeReferencesInto into typeReferenceToModuleOrigin expression =
                                         soFarAcrossDefs
                             )
                             into
+
                 _ ->
                     into
             )
@@ -1795,14 +1851,24 @@ expressionTypeReferencesInto into typeReferenceToModuleOrigin expression =
 regionIncludes : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Region -> Bool
 regionIncludes positionToCheck region =
     (when sourcePositionCompare region.start positionToCheck is
-        LT -> True
-        EQ -> True
-        GT -> False
+        LT ->
+            True
+
+        EQ ->
+            True
+
+        GT ->
+            False
     )
         && (when sourcePositionCompare region.end positionToCheck is
-                LT -> False
-                EQ -> True
-                GT -> True
+                LT ->
+                    False
+
+                EQ ->
+                    True
+
+                GT ->
+                    True
            )
 
 
@@ -1819,8 +1885,12 @@ moduleDeclarationRegionIncludingDocs moduleDeclaration =
 sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.row b.row is
-        LT -> LT
-        GT -> GT
+        LT ->
+            LT
+
+        GT ->
+            GT
+
         EQ ->
             Basics.compare a.col b.col
 
@@ -1840,7 +1910,7 @@ arrayPushLastJust maybeNewLast array =
     when maybeNewLast is
         Nothing ->
             array
-        
+
         Just newLast ->
             array |> Array.pushLast newLast
 

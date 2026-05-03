@@ -1,14 +1,14 @@
 module Tests exposing (tests)
 
-import ExtraCheck
 import DebugIsNotUsed
-import StringSpellsCompanyNameCorrectly
 import DocumentationDoesNotContainTodo
-import Test
 import Expect
-import Test.Runner
-import Random
+import ExtraCheck
 import IntroducedNameIsUsed
+import Random
+import StringSpellsCompanyNameCorrectly
+import Test
+import Test.Runner
 
 
 tests : Test.Test
@@ -1342,8 +1342,8 @@ tests =
                               , details =
                                     "Use it or remove it along with potential exposes. If you think you may still need something like it sometime in the distant future, keep it around in a file outside this gren project."
                               , region =
-                                  ExtraCheck.ExpectUnderExactly
-                                      { section = "Unused", startingAt = { row = 3, col = 6 } }
+                                    ExtraCheck.ExpectUnderExactly
+                                        { section = "Unused", startingAt = { row = 3, col = 6 } }
                               , fixedFiles =
                                     [ { path = "src/A.gren"
                                       , source =
@@ -1364,7 +1364,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1381,7 +1382,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1398,7 +1400,8 @@ tests =
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
-                                      , source = """
+                                      , source =
+                                            """
                                             module A exposing (a)
                                             
                                             a =
@@ -1414,7 +1417,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1432,7 +1436,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1450,7 +1455,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1475,7 +1481,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1492,7 +1499,8 @@ tests =
                               , region = ExtraCheck.ExpectUnder "\"the name is obviously frits.com\""
                               , fixedFiles =
                                     [ { path = "src/A.gren"
-                                      , source = """
+                                      , source =
+                                            """
                                             module A exposing (a)
                                             
                                             a =
@@ -1509,7 +1517,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1526,7 +1535,8 @@ tests =
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
-                                      , source = """
+                                      , source =
+                                            """
                                             module A exposing (a)
                                             
                                             a =
@@ -1543,7 +1553,8 @@ tests =
                     { projectConfiguration = ExtraCheck.applicationConfigurationMinimal
                     , files =
                         [ { path = "src/A.gren"
-                          , source = """
+                          , source =
+                                """
                                 module A exposing (a)
                                 
                                 a =
@@ -1560,7 +1571,8 @@ tests =
                               , region = ExtraCheck.ExpectUnder "frits.com"
                               , fixedFiles =
                                     [ { path = "src/A.gren"
-                                      , source = """
+                                      , source =
+                                            """
                                             module A exposing (a)
                                             
                                             a =
@@ -1581,5 +1593,6 @@ expectExpectationFail expectationToCheck =
     when expectationToCheck |> Test.Runner.getFailureReason is
         Nothing ->
             Expect.fail "expected Expect.fail _"
+
         Just failure ->
             Expect.pass

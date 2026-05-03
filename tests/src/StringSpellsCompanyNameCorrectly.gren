@@ -1,11 +1,11 @@
 module StringSpellsCompanyNameCorrectly exposing (check)
 
-import Compiler.SourcePosition
-import ExtraCheck
+import Array.Builder
 import Compiler.Ast.Source
 import Compiler.Parse.Context
-import Array.Builder
+import Compiler.SourcePosition
 import Dict
+import ExtraCheck
 
 
 check : ExtraCheck.Check
@@ -50,6 +50,7 @@ moduleDataToKnowledge moduleData =
                 )
     }
 
+
 expressionToTyposInStringsInto :
     Array.Builder.Builder Compiler.SourcePosition.Region
     -> Compiler.Ast.Source.Expression
@@ -58,7 +59,7 @@ expressionToTyposInStringsInto resultRegionsSoFar expression =
     when expression.value is
         Compiler.Ast.Source.StringLiteral string ->
             resultRegionsSoFar
-                |> Array.Builder.append            
+                |> Array.Builder.append
                     (string
                         |> ExtraCheck.sourceRegionsOf "frits.com"
                         |> Array.map (regionRelativeTo expression.start)
