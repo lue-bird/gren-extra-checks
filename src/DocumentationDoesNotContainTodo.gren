@@ -1,8 +1,10 @@
 module DocumentationDoesNotContainTodo exposing (check)
+
 {-| Report special marks in comments.
 
 @docs check
 -}
+
 import Array.Builder
 import Compiler.Ast.Source
 import Compiler.Outline

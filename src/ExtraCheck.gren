@@ -1,16 +1,4 @@
-module ExtraCheck exposing
-    ( ignoreErrorsForPathsWhere
-    , create
-    , Error, grenJsonPath
-    , SourceEdit, insertAt, removeRegion, replaceRegion
-    , expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, LocalVariableOrigin(..), patternImmediateSubsFold, typeImmediateSubsFold
-    , patternVariablesFold, patternArrayVariablesFold
-    , locatedRegion, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition
-    , outlineExposedModuleNameSet, outlineExposedModuleNames
-    , implicitImports
-    , expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion(..)
-    , Check, run, sourceApplyEdits, SourceEditError(..), Run(..)
-    )
+module ExtraCheck exposing (Check, Error, ExpectedErrorRegion(..), LocalVariableOrigin(..), Run(..), SourceEdit, SourceEditError(..), applicationConfigurationMinimal, create, expectToReport, expressionImmediateSubsFold, expressionImmediateSubsFoldWithIntroducedVariables, grenJsonPath, ignoreErrorsForPathsWhere, implicitImports, insertAt, locatedRegion, outlineExposedModuleNameSet, outlineExposedModuleNames, patternArrayVariablesFold, patternImmediateSubsFold, patternVariablesFold, removeRegion, replaceRegion, run, sourceApplyEdits, sourceExtractInRegion, sourceRegionsOf, sourceUnitIndexToPosition, typeImmediateSubsFold)
 
 {-| A check inspects modules, `gren.json`, dependencies and extra files like `README.md` from your project
 and uses the combined knowledge to report problems.
@@ -92,32 +80,30 @@ since the behavior of a check rarely changes drastically.
 
 @docs expectToReport, applicationConfigurationMinimal, ExpectedErrorRegion
 
-
 # running
 
 Make `gren-extra-checks` run in a new environment
 
 @docs Check, run, sourceApplyEdits, SourceEditError, Run
-
 -}
 
 import Ansi
+import Array.Builder
+import Compiler.Ast.Source
+import Compiler.ModuleName
+import Compiler.Outline
+import Compiler.Parse.Context
+import Compiler.Parse.Module
+import Compiler.SourcePosition
 import Dict exposing (Dict)
-import Diff
-import GrenCoreDependency
-import Expect
 import DictLocalExtra
+import Diff
+import Expect
+import FileSystem.Path
+import GrenCoreDependency
 import Json.Decode
 import Set exposing (Set)
-import Compiler.SourcePosition
-import Compiler.Ast.Source
-import Array.Builder
 import String.Parser.Advanced
-import Compiler.Parse.Module
-import Compiler.Parse.Context
-import FileSystem.Path
-import Compiler.Outline
-import Compiler.ModuleName
 
 
 {-| A construct that can inspect your project files and report errors, see [`ExtraCheck.create`](ExtraCheck#create)
@@ -369,7 +355,7 @@ create check =
                                     (project.removedExtraFilePaths
                                         |> Array.foldl Dict.remove cache.extraFileKnowledgeByPath
                                     )
-                        
+
                         combinedKnowledge : knowledge
                         combinedKnowledge =
                             moduleKnowledges
@@ -389,7 +375,7 @@ create check =
                                 (\error soFar ->
                                     if project.ignoreErrorsForPathsWhere error.path then
                                         soFar
-                                    
+
                                     else
                                         soFar
                                             |> Dict.update
@@ -407,7 +393,7 @@ create check =
                                                 )
                                 )
                                 Dict.empty
-                                |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
+                            |> Dict.map (\_ builder -> builder |> Array.Builder.toArray)
                     , nextRun =
                         runWithCache
                             { grenJsonKnowledge = Just grenJsonKnowledgeAndCache
@@ -669,7 +655,7 @@ If you need a set, use [`outlineExposedModuleNameSet`](#outlineExposedModuleName
 -}
 outlineExposedModuleNames : Compiler.Outline.Exposed -> Array Compiler.ModuleName.ModuleName
 outlineExposedModuleNames exposed =
-    when exposed is 
+    when exposed is
         Compiler.Outline.ExposedArray array ->
             array
 
@@ -695,7 +681,7 @@ otherwise prefer [`outlineExposedModuleNames`](#outlineExposedModuleNames) which
 -}
 outlineExposedModuleNameSet : Compiler.Outline.Exposed -> Set String
 outlineExposedModuleNameSet exposed =
-    when exposed is 
+    when exposed is
         Compiler.Outline.ExposedArray array ->
             array |> setFromArrayMap Compiler.ModuleName.toString
 
@@ -740,7 +726,7 @@ implicitImports :
           exposes : Set String
         }
 implicitImports =
-    Dict.singleton "Basics"  
+    Dict.singleton "Basics"
         { alias = Nothing
         , exposes =
             [ "Int"
@@ -787,15 +773,15 @@ implicitImports =
             ]
                 |> setFromArray
         }
-    |> Dict.set "Array" { alias = Nothing, exposes = setFromArray [ "Array" ] }
-    |> Dict.set "Maybe" { alias = Nothing, exposes = setFromArray [ "Maybe", "Just", "Nothing" ] }
-    |> Dict.set "Result" { alias = Nothing, exposes = setFromArray [ "Result", "Ok", "Err" ] }
-    |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
-    |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
-    |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
-    |> Dict.set "Platform" { alias = Nothing, exposes = Set.singleton "Program" }
-    |> Dict.set "Platform.Cmd" { alias = Just "Cmd", exposes = Set.singleton "Cmd" }
-    |> Dict.set "Platform.Sub" { alias = Just "Sub", exposes = Set.singleton "Sub" }
+        |> Dict.set "Array" { alias = Nothing, exposes = setFromArray [ "Array" ] }
+        |> Dict.set "Maybe" { alias = Nothing, exposes = setFromArray [ "Maybe", "Just", "Nothing" ] }
+        |> Dict.set "Result" { alias = Nothing, exposes = setFromArray [ "Result", "Ok", "Err" ] }
+        |> Dict.set "String" { alias = Nothing, exposes = Set.singleton "String" }
+        |> Dict.set "Char" { alias = Nothing, exposes = Set.singleton "Char" }
+        |> Dict.set "Debug" { alias = Nothing, exposes = Set.empty }
+        |> Dict.set "Platform" { alias = Nothing, exposes = Set.singleton "Program" }
+        |> Dict.set "Platform.Cmd" { alias = Just "Cmd", exposes = Set.singleton "Cmd" }
+        |> Dict.set "Platform.Sub" { alias = Just "Sub", exposes = Set.singleton "Sub" }
 
 
 {-| A single edit to be applied to a file's source
@@ -860,16 +846,21 @@ sourceApplyEdits fixes sourceCode =
         else
             Ok resultAfterFix
 
+
 sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.row b.row is
-        LT -> LT
-        GT -> GT
+        LT ->
+            LT
+
+        GT ->
+            GT
+
         EQ ->
             Basics.compare a.col b.col
 
 
-applyFixSingle : SourceEdit -> (Array String -> Array String)
+applyFixSingle : SourceEdit -> Array String -> Array String
 applyFixSingle replace lines =
     let
         linesBefore : Array String
@@ -899,7 +890,7 @@ applyFixSingle replace lines =
                 |> String.lines
                 |> Array.update 0 (\replacementFirstLine -> startLine ++ replacementFirstLine)
                 |> arrayLastMap (\replacementLastLine -> replacementLastLine ++ endLine)
-            )
+           )
         ++ linesAfter
 
 
@@ -931,6 +922,7 @@ regionsCollide a b =
 
                 GT ->
                     True
+
 
 
 -- test
@@ -1149,7 +1141,7 @@ expectToReport expectedErrors config =
                             (\path errors ->
                                 { path = path, errors = errors |> Array.Builder.toArray }
                             )
-                
+
                 invalidExpectedErrors =
                     expectedErrorsByPath |> invalidExpectedErrorsIn { files = config.files, outline = outline }
             in
@@ -1266,14 +1258,14 @@ toCheckResult check project =
                         ++ (when runErrorsByPath |> Dict.get "gren.json" is
                                 Just errorsForGrenJson ->
                                     [ { path = "gren.json"
-                                        , source = project.grenJson.source
-                                        , errors = errorsForGrenJson
-                                        }
+                                      , source = project.grenJson.source
+                                      , errors = errorsForGrenJson
+                                      }
                                     ]
 
                                 Nothing ->
                                     []
-                            )
+                           )
                         ++ (extraFiles
                                 |> Array.mapAndKeepJust
                                     (\extraFile ->
@@ -1287,7 +1279,7 @@ toCheckResult check project =
                                                     }
                                                 )
                                     )
-                            )
+                           )
             in
             Ok fileErrors
 
@@ -1343,7 +1335,7 @@ parseModules moduleFiles =
                                             }
                                     )
 
-                            (Err _) as failedToParseSoFar ->
+                            Err _ as failedToParseSoFar ->
                                 failedToParseSoFar
             )
             (Ok (Array.Builder.empty 2))
@@ -1368,7 +1360,7 @@ moduleAndCommentsParser =
 moduleFailedToParse :
     { path : String
     , source : String
-    , error : Array.Array (String.Parser.Advanced.DeadEnd Compiler.Parse.Context.Context Compiler.Parse.Module.Error) 
+    , error : Array.Array (String.Parser.Advanced.DeadEnd Compiler.Parse.Context.Context Compiler.Parse.Module.Error)
     }
     -> String
 moduleFailedToParse file =
@@ -1386,7 +1378,8 @@ invalidExpectedErrorsIn :
     { files : Array { path : String, source : String }
     , outline : Compiler.Outline.Outline
     }
-    -> (Array { path : String, errors : Array ExpectedFileError } -> Array String)
+    -> Array { path : String, errors : Array ExpectedFileError }
+    -> Array String
 invalidExpectedErrorsIn project expectedErrors =
     let
         sourceDirectories : Array String
@@ -1525,7 +1518,7 @@ expectErrors sourceByPath expectationsList reviewResult =
                             (\fileExpectation soFar ->
                                 if fileExpectation.errors |> Array.isEmpty then
                                     soFar
-                                
+
                                 else
                                     soFar |> Dict.set fileExpectation.path fileExpectation.errors
                             )
@@ -1581,9 +1574,10 @@ reorderErrors :
     , pairs : Array.Builder.Builder { expected : ExpectedFileError, reviewError : FileCheckError }
     , expectedErrorsWithNoMatch : Array.Builder.Builder ExpectedFileError
     }
-    -> { expected : Array ExpectedFileError
-       , reviewErrors : Array FileCheckError
-       }
+    ->
+        { expected : Array ExpectedFileError
+        , reviewErrors : Array FileCheckError
+        }
 reorderErrors reorderState =
     -- can be optimized
     when reorderState.expectedErrors |> Array.popFirst is
@@ -1756,9 +1750,9 @@ expectErrorsMatch toCheckForMatchingErrors =
 
 expectedErrorForMessage :
     { error_
-        | message : String
-        , details : String
-        , region : ExpectedErrorRegion
+    | message : String
+    , details : String
+    , region : ExpectedErrorRegion
     }
     -> { message : String, details : String, under : String }
 expectedErrorForMessage expectedError =
@@ -2010,9 +2004,9 @@ checkFixesAreCorrect toCheck =
 
 checkFileFixesAreCorrect :
     { expectedError_
-        | region : ExpectedErrorRegion
-        , message : String
-        , details : String
+    | region : ExpectedErrorRegion
+    , message : String
+    , details : String
     }
     -> String
     -> String
@@ -2310,14 +2304,19 @@ typeImmediateSubsFold reduce initialState parentExpression =
     when parentExpression is
         Compiler.Ast.Source.TVar _ ->
             initialState
+
         Compiler.Ast.Source.TParens inParens ->
             initialState |> reduce inParens
+
         Compiler.Ast.Source.TLambda function ->
             initialState |> reduce function.from |> reduce function.to
+
         Compiler.Ast.Source.TType construct ->
             construct.args |> Array.foldl reduce initialState
+
         Compiler.Ast.Source.TTypeQual construct ->
             construct.args |> Array.foldl reduce initialState
+
         Compiler.Ast.Source.TRecord { fields, extending = _ } ->
             fields
                 |> Array.foldl
@@ -2336,13 +2335,24 @@ patternImmediateSubsFold :
     -> state
 patternImmediateSubsFold reduce initialState parentExpression =
     when parentExpression is
-        Compiler.Ast.Source.PInt _ -> initialState
-        Compiler.Ast.Source.PChr _ -> initialState
-        Compiler.Ast.Source.PStr _ -> initialState
-        Compiler.Ast.Source.PAnything _ -> initialState
-        Compiler.Ast.Source.PVar _ -> initialState
+        Compiler.Ast.Source.PInt _ ->
+            initialState
+
+        Compiler.Ast.Source.PChr _ ->
+            initialState
+
+        Compiler.Ast.Source.PStr _ ->
+            initialState
+
+        Compiler.Ast.Source.PAnything _ ->
+            initialState
+
+        Compiler.Ast.Source.PVar _ ->
+            initialState
+
         Compiler.Ast.Source.PAlias alias ->
             initialState |> reduce alias.pattern
+
         Compiler.Ast.Source.PCtor variant ->
             when variant.arg is
                 Nothing ->
@@ -2350,6 +2360,7 @@ patternImmediateSubsFold reduce initialState parentExpression =
 
                 Just value ->
                     initialState |> reduce value
+
         Compiler.Ast.Source.PCtorQual variant ->
             when variant.arg is
                 Nothing ->
@@ -2357,8 +2368,10 @@ patternImmediateSubsFold reduce initialState parentExpression =
 
                 Just value ->
                     initialState |> reduce value
+
         Compiler.Ast.Source.PArray elements ->
             elements |> Array.foldl reduce initialState
+
         Compiler.Ast.Source.PRecord fields ->
             fields
                 |> Array.foldl
@@ -2383,39 +2396,57 @@ expressionImmediateSubsFold :
     -> state
 expressionImmediateSubsFold reduce initialState parentExpression =
     when parentExpression is
-        Compiler.Ast.Source.NumberLiteral _ -> initialState
-        Compiler.Ast.Source.CharLiteral _ -> initialState
-        Compiler.Ast.Source.StringLiteral _ -> initialState
+        Compiler.Ast.Source.NumberLiteral _ ->
+            initialState
+
+        Compiler.Ast.Source.CharLiteral _ ->
+            initialState
+
+        Compiler.Ast.Source.StringLiteral _ ->
+            initialState
+
         Compiler.Ast.Source.Var _ ->
             initialState
+
         Compiler.Ast.Source.VarQual _ ->
             initialState
+
         Compiler.Ast.Source.Accessor _ ->
             initialState
+
         Compiler.Ast.Source.Operator _ ->
             initialState
+
         Compiler.Ast.Source.Parens inParens ->
             initialState |> reduce inParens
+
         Compiler.Ast.Source.Negate inNegation ->
             initialState |> reduce inNegation
+
         Compiler.Ast.Source.Lambda { patterns = _, body = result } ->
             initialState |> reduce result
+
         Compiler.Ast.Source.Access { accessor = _, expression = record } ->
             initialState |> reduce record
+
         Compiler.Ast.Source.ArrayLiteral elements ->
             elements |> Array.foldl reduce initialState
+
         Compiler.Ast.Source.Record fields ->
             fields
                 |> Array.foldl (\field soFar -> soFar |> reduce field.value)
                     initialState
+
         Compiler.Ast.Source.Update recordUpdate ->
             recordUpdate.newValues
                 |> Array.foldl (\field soFar -> soFar |> reduce field.value)
                     (initialState
                         |> reduce recordUpdate.record
                     )
+
         Compiler.Ast.Source.Binops { left = left, operator = _, right = right } ->
             initialState |> reduce left |> reduce right
+
         Compiler.Ast.Source.If ifThenElse ->
             ifThenElse.branches
                 |> Array.foldl
@@ -2426,12 +2457,14 @@ expressionImmediateSubsFold reduce initialState parentExpression =
                     )
                     initialState
                 |> reduce ifThenElse.elseBranch
+
         Compiler.Ast.Source.Call call ->
             call.args
                 |> Array.foldl reduce
                     (initialState
                         |> reduce call.fn
                     )
+
         Compiler.Ast.Source.Let letIn ->
             letIn.defs
                 |> Array.foldl
@@ -2441,12 +2474,14 @@ expressionImmediateSubsFold reduce initialState parentExpression =
                                 (when def.value is
                                     Compiler.Ast.Source.Destruct destruct ->
                                         destruct.body
+
                                     Compiler.Ast.Source.Define define ->
                                         define.body
                                 )
                     )
                     initialState
                 |> reduce letIn.body
+
         Compiler.Ast.Source.When whenIs ->
             whenIs.branches
                 |> Array.foldl (\case soFar -> soFar |> reduce case.body)
@@ -2485,47 +2520,64 @@ Note that in these cases, you also need to check for module-declared variable na
 -}
 expressionImmediateSubsFoldWithIntroducedVariables :
     Dict String LocalVariableOrigin
-    -> (Compiler.Ast.Source.Expression
-        -> Dict String LocalVariableOrigin
-        -> state
-        -> state
-       )
+    ->
+        (Compiler.Ast.Source.Expression
+         -> Dict String LocalVariableOrigin
+         -> state
+         -> state
+        )
     -> state
     -> Compiler.Ast.Source.Expression
     -> state
 expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce initialState parentExpression =
     when parentExpression.value is
-        Compiler.Ast.Source.NumberLiteral _ -> initialState
-        Compiler.Ast.Source.CharLiteral _ -> initialState
-        Compiler.Ast.Source.StringLiteral _ -> initialState
+        Compiler.Ast.Source.NumberLiteral _ ->
+            initialState
+
+        Compiler.Ast.Source.CharLiteral _ ->
+            initialState
+
+        Compiler.Ast.Source.StringLiteral _ ->
+            initialState
+
         Compiler.Ast.Source.Var _ ->
             initialState
+
         Compiler.Ast.Source.VarQual _ ->
             initialState
+
         Compiler.Ast.Source.Accessor _ ->
             initialState
+
         Compiler.Ast.Source.Operator _ ->
             initialState
+
         Compiler.Ast.Source.Parens inParens ->
             initialState |> reduce inParens initialLocalVariables
+
         Compiler.Ast.Source.Negate inNegation ->
             initialState |> reduce inNegation initialLocalVariables
+
         Compiler.Ast.Source.Lambda { patterns = parameters, body = result } ->
             initialState
                 |> reduce result
                     (patternArrayVariablesFold Dict.set initialLocalVariables parameters)
+
         Compiler.Ast.Source.Access { accessor = _, expression = record } ->
             initialState |> reduce record initialLocalVariables
+
         Compiler.Ast.Source.ArrayLiteral elements ->
             elements
                 |> Array.foldl
                     (\element soFar -> soFar |> reduce element initialLocalVariables)
                     initialState
+
         Compiler.Ast.Source.Record fields ->
             fields
                 |> Array.foldl
                     (\field soFar -> soFar |> reduce field.value initialLocalVariables)
                     initialState
+
         Compiler.Ast.Source.Update recordUpdate ->
             recordUpdate.newValues
                 |> Array.foldl
@@ -2533,10 +2585,12 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     (initialState
                         |> reduce recordUpdate.record initialLocalVariables
                     )
+
         Compiler.Ast.Source.Binops { left = left, operator = _, right = right } ->
             initialState
                 |> reduce left initialLocalVariables
                 |> reduce right initialLocalVariables
+
         Compiler.Ast.Source.If ifThenElse ->
             ifThenElse.branches
                 |> Array.foldl
@@ -2547,6 +2601,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     )
                     initialState
                 |> reduce ifThenElse.elseBranch initialLocalVariables
+
         Compiler.Ast.Source.Call call ->
             call.args
                 |> Array.foldl
@@ -2554,6 +2609,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     (initialState
                         |> reduce call.fn initialLocalVariables
                     )
+
         Compiler.Ast.Source.Let letIn ->
             let
                 localVariablesIncludingAcrossDefines : Dict String LocalVariableOrigin
@@ -2567,7 +2623,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
 
                                     Compiler.Ast.Source.Define define ->
                                         soFar
-                                            |> Dict.set define.name.value 
+                                            |> Dict.set define.name.value
                                                 (OriginLetDefineVariable
                                                     { variableDefine =
                                                         { start = def.start, end = def.end, value = define }
@@ -2588,6 +2644,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                                     |> reduce
                                         destruct.body
                                         localVariablesIncludingAcrossDefines
+
                             Compiler.Ast.Source.Define define ->
                                 soFar
                                     |> reduce
@@ -2599,6 +2656,7 @@ expressionImmediateSubsFoldWithIntroducedVariables initialLocalVariables reduce 
                     )
                     initialState
                 |> reduce letIn.body localVariablesIncludingAcrossDefines
+
         Compiler.Ast.Source.When whenIs ->
             whenIs.branches
                 |> Array.foldl
@@ -2642,16 +2700,26 @@ patternVariablesFold reduce initialState pattern =
     -- small Dicts or to construct a big one. I assume it should be the big one though
     -- because less objects are created and (I think) more comparisons are happening
     when pattern.value is
-        Compiler.Ast.Source.PInt _ -> initialState
-        Compiler.Ast.Source.PChr _ -> initialState
-        Compiler.Ast.Source.PStr _ -> initialState
-        Compiler.Ast.Source.PAnything _ -> initialState
+        Compiler.Ast.Source.PInt _ ->
+            initialState
+
+        Compiler.Ast.Source.PChr _ ->
+            initialState
+
+        Compiler.Ast.Source.PStr _ ->
+            initialState
+
+        Compiler.Ast.Source.PAnything _ ->
+            initialState
+
         Compiler.Ast.Source.PVar variableName ->
             initialState
-                |> reduce variableName 
+                |> reduce variableName
                     (OriginPatternVariable (pattern |> locatedRegion))
+
         Compiler.Ast.Source.PAlias alias ->
             patternVariablesFold reduce initialState alias.pattern
+
         Compiler.Ast.Source.PCtor variant ->
             when variant.arg is
                 Nothing ->
@@ -2659,6 +2727,7 @@ patternVariablesFold reduce initialState pattern =
 
                 Just value ->
                     patternVariablesFold reduce initialState value
+
         Compiler.Ast.Source.PCtorQual variant ->
             when variant.arg is
                 Nothing ->
@@ -2666,11 +2735,13 @@ patternVariablesFold reduce initialState pattern =
 
                 Just value ->
                     patternVariablesFold reduce initialState value
+
         Compiler.Ast.Source.PArray elements ->
             elements
                 |> Array.foldl
                     (\element soFar -> patternVariablesFold reduce soFar element)
                     initialState
+
         Compiler.Ast.Source.PRecord fields ->
             fields
                 |> Array.foldl

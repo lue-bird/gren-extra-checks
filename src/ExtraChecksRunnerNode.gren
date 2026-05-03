@@ -1,11 +1,14 @@
 module ExtraChecksRunnerNode exposing (Program, ProgramEvent(..), ProgramState, initWith, main, program, subscriptions, update)
+
 {-| Run checks in the command line.
 
 @docs program, Program, initWith, update, subscriptions, ProgramEvent, ProgramState
+
 ## _only for trying it out_
 
 @docs main
 -}
+
 import Ansi
 import Array.Builder
 import Bytes

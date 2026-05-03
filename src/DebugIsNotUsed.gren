@@ -1,8 +1,10 @@
 module DebugIsNotUsed exposing (check)
+
 {-| Report `Debug` usage.
 
 @docs check
 -}
+
 import Array.Builder
 import Compiler.Ast.Source
 import Compiler.Parse.Context
