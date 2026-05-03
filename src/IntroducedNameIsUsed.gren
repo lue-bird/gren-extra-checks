@@ -353,6 +353,13 @@ inspectModule module_ =
                             Dict.empty
                     )
 
+        moduleVariableInfos :
+            Dict.Dict
+                String
+                { declarationRegion : Compiler.SourcePosition.Region
+                , nameRegion : Compiler.SourcePosition.Region
+                , portModuleKeywordStartIfPort : Maybe Compiler.SourcePosition.Position
+                }
         moduleVariableInfos =
             module_.syntax.values
                 |> Array.foldl
@@ -470,7 +477,12 @@ inspectModule module_ =
                                     |> ExtraCheck.patternArrayVariablesFold Dict.set Dict.empty
                                 )
                                 (\reference soFar ->
-                                    soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
+                                    if reference.qualification == "" && reference.name == moduleVariable.value.value.name.value then
+                                        -- self-reference
+                                        soFar
+                                    
+                                    else
+                                        soFar |> dictSetSet (reference |> variableReferenceToModuleOrigin) reference.name
                                 )
                                 (moduleVariable.value.value.args
                                     |> patternArrayUsedVariantsFold
@@ -516,24 +528,36 @@ inspectModule module_ =
         usedTypesIncludingUnqualifiedFromExposingAll =
             module_.syntax.aliases
                 |> Array.foldl
-                    (\moduleVariable soFar ->
+                    (\moduleVariable soFarAcrossTypeAliases ->
                         moduleVariable.value.value.type_.value
-                            |> typeReferencesInto soFar typeReferenceToModuleOrigin
+                            |> typeReferencesFold
+                                (\reference soFar ->
+                                    soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
+                                )
+                                soFarAcrossTypeAliases
                     )
                     Dict.empty
                 |> (\typeNames ->
                         module_.syntax.unions
                             |> Array.foldl
-                                (\moduleVariable soFarAcrossUnions ->
-                                    moduleVariable.value.value.variants
+                                (\choiceType soFarAcrossUnions ->
+                                    choiceType.value.value.variants
                                         |> Array.foldl
                                             (\variant soFarAcrossVariants ->
                                                 when variant.value.payload is
                                                     Nothing -> soFarAcrossVariants
                                                     Just variantValue ->
                                                         variantValue.value
-                                                            |> typeReferencesInto soFarAcrossVariants
-                                                                typeReferenceToModuleOrigin
+                                                            |> typeReferencesFold
+                                                                (\reference soFar ->
+                                                                    if reference.qualification == "" && reference.name == choiceType.value.value.name.value then
+                                                                        -- self-reference
+                                                                        soFar
+                                                                    
+                                                                    else
+                                                                        soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
+                                                                )
+                                                                soFarAcrossVariants
                                             )
                                             soFarAcrossUnions
                                 )
@@ -552,8 +576,11 @@ inspectModule module_ =
                                     |> Array.foldl
                                         (\port_ soFarAcrossPorts ->
                                             port_.value.value.signature.value
-                                                |> typeReferencesInto soFarAcrossPorts
-                                                    typeReferenceToModuleOrigin
+                                                |> typeReferencesFold
+                                                    (\reference soFar ->
+                                                        soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
+                                                    )
+                                                    soFarAcrossPorts
                                         )
                                         typeNames
                    )
@@ -568,8 +595,11 @@ inspectModule module_ =
                                                     soFarAcrossModuleVariables
                                                 Just signature ->
                                                     signature.type_.value
-                                                        |> typeReferencesInto soFarAcrossModuleVariables
-                                                            typeReferenceToModuleOrigin
+                                                        |> typeReferencesFold
+                                                            (\reference soFar ->
+                                                                soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
+                                                            )
+                                                            soFarAcrossModuleVariables
                                             )
                                             typeReferenceToModuleOrigin
                                 )
@@ -1632,29 +1662,21 @@ unusedLocalVariablesAdd name origin scope soFar =
             { name = name, region = region, origin = origin, scope = scope }
 
 
-typeReferencesInto :
-    Dict.Dict String (Set.Set String)
-    -> ({ qualification : String, name : String} -> String)
+typeReferencesFold :
+    ({ qualification : String, name : String} -> state -> state)
+    -> state
     -> Compiler.Ast.Source.Type_
-    -> Dict.Dict String (Set.Set String)
-typeReferencesInto into typeReferenceOriginModule type_ =
+    -> state
+typeReferencesFold reduceTypeReference into type_ =
     type_
         |> ExtraCheck.typeImmediateSubsFold
-            (\sub soFar -> sub.value |> typeReferencesInto soFar typeReferenceOriginModule)
+            (\sub soFar -> sub.value |> typeReferencesFold reduceTypeReference soFar)
             (when type_ is
                 Compiler.Ast.Source.TType { name } ->
-                    let
-                        originModule =
-                            { qualification = "", name = name.value } |> typeReferenceOriginModule
-                    in
-                    into |> dictSetSet originModule name.value
+                    into |> reduceTypeReference { qualification = "", name = name.value }
 
                 Compiler.Ast.Source.TTypeQual { qualifier = qualification, name } ->
-                    let
-                        originModule =
-                            { qualification = qualification, name = name } |> typeReferenceOriginModule
-                    in
-                    into |> dictSetSet originModule name
+                    into |> reduceTypeReference { qualification = qualification, name = name }
                 
                 _ ->
                     into
@@ -1679,10 +1701,10 @@ expressionTypeReferencesInto :
     -> ({ qualification : String, name : String} -> String)
     -> Compiler.Ast.Source.Expression_
     -> Dict.Dict String (Set.Set String)
-expressionTypeReferencesInto into typeReferenceOriginModule expression =
+expressionTypeReferencesInto into typeReferenceToModuleOrigin expression =
     expression
         |> ExtraCheck.expressionImmediateSubsFold
-            (\sub soFar -> sub.value |> expressionTypeReferencesInto soFar typeReferenceOriginModule)
+            (\sub soFar -> sub.value |> expressionTypeReferencesInto soFar typeReferenceToModuleOrigin)
             (when expression is
                 Compiler.Ast.Source.Let letIn ->
                     letIn.defs
@@ -1691,8 +1713,11 @@ expressionTypeReferencesInto into typeReferenceOriginModule expression =
                                 when def.value is
                                     Compiler.Ast.Source.Define { typeSignature = Just signature } ->    
                                         signature.value
-                                            |> typeReferencesInto soFarAcrossDefs
-                                                typeReferenceOriginModule
+                                            |> typeReferencesFold
+                                                (\reference soFar ->
+                                                    soFar |> dictSetSet (reference |> typeReferenceToModuleOrigin) reference.name
+                                                )
+                                                soFarAcrossDefs
 
                                     _ ->
                                         soFarAcrossDefs

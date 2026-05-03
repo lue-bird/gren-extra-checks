@@ -1,5 +1,6 @@
 #### 2.0.2
 - `IntroducedNameIsUsed`:
+    - do not consider only-self-referential variables and choice types as used
     - consider special effects manager functions like `cmdMap` as used
 
 #### 2.0.1
