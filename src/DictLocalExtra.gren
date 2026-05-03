@@ -1,7 +1,7 @@
-module DictLocalExtra exposing (toArrayMap, fromArrayMap, unionWith)
+module DictLocalExtra exposing (fromArrayMap, toArrayMap, unionWith)
 
-import Dict exposing (Dict)
 import Array.Builder
+import Dict exposing (Dict)
 
 
 toArrayMap : (key -> value -> element) -> Dict key value -> Array element
@@ -47,7 +47,9 @@ unionWith valueABMerge bDict aDict =
                     (\maybeExistingA ->
                         Just
                             (when maybeExistingA is
-                                Nothing -> b
+                                Nothing ->
+                                    b
+
                                 Just a ->
                                     valueABMerge a b
                             )
@@ -55,4 +57,3 @@ unionWith valueABMerge bDict aDict =
         )
         aDict
         bDict
-

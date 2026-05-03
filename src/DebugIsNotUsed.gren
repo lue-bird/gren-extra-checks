@@ -1,19 +1,16 @@
 module DebugIsNotUsed exposing (check)
-
 {-| Report `Debug` usage.
 
 @docs check
-
 -}
-
-import ExtraCheck
-import Compiler.SourcePosition
+import Array.Builder
 import Compiler.Ast.Source
-import Set
+import Compiler.Parse.Context
+import Compiler.SourcePosition
 import Dict
 import DictLocalExtra
-import Array.Builder
-import Compiler.Parse.Context
+import ExtraCheck
+import Set
 
 
 {-| Report uses of [`Debug` module](https://packages.gren-lang.org/package/gren-lang/core/version/latest/module/Debug) members
@@ -158,6 +155,7 @@ moduleDataToKnowledge moduleData =
                                                     soFar.debugToStringUses
                                                         |> Array.Builder.pushLast referenceRegion
                                                 }
+
                                             "todo" ->
                                                 { debugLogUses = soFar.debugLogUses
                                                 , debugToStringUses = soFar.debugToStringUses
@@ -165,6 +163,7 @@ moduleDataToKnowledge moduleData =
                                                     soFar.debugTodoUses
                                                         |> Array.Builder.pushLast referenceRegion
                                                 }
+
                                             "log" ->
                                                 { debugToStringUses = soFar.debugToStringUses
                                                 , debugTodoUses = soFar.debugTodoUses
@@ -172,6 +171,7 @@ moduleDataToKnowledge moduleData =
                                                     soFar.debugLogUses
                                                         |> Array.Builder.pushLast referenceRegion
                                                 }
+
                                             _ ->
                                                 soFar
 
@@ -183,11 +183,16 @@ moduleDataToKnowledge moduleData =
                     { debugLogUses = Array.Builder.empty 0
                     , debugTodoUses = Array.Builder.empty 0
                     , debugToStringUses = Array.Builder.empty 0
-                    }                    
+                    }
 
-        debugLogUses = debugUses.debugLogUses |> Array.Builder.toArray
-        debugTodoUses = debugUses.debugTodoUses |> Array.Builder.toArray
-        debugToStringUses = debugUses.debugToStringUses |> Array.Builder.toArray
+        debugLogUses =
+            debugUses.debugLogUses |> Array.Builder.toArray
+
+        debugTodoUses =
+            debugUses.debugTodoUses |> Array.Builder.toArray
+
+        debugToStringUses =
+            debugUses.debugToStringUses |> Array.Builder.toArray
     in
     if (debugLogUses |> Array.isEmpty) && (debugTodoUses |> Array.isEmpty) && (debugToStringUses |> Array.isEmpty) then
         knowledgeNone
@@ -202,7 +207,7 @@ moduleDataToKnowledge moduleData =
 
 referenceIsImportedFrom : { fullQualification : String, exposes : Array String } -> { qualification : String, name : String } -> Bool
 referenceIsImportedFrom importOfTheModuleToCheckFor reference =
-    reference.qualification == importOfTheModuleToCheckFor.fullQualification
+    (reference.qualification == importOfTheModuleToCheckFor.fullQualification)
         || ((reference.qualification == "")
                 && (importOfTheModuleToCheckFor.exposes |> Array.member reference.name)
            )
@@ -293,12 +298,12 @@ expressionUsedReferencesFoldExcludingLocalVariables moduleDeclaredVariableNames 
                 initialState
                     |> reduceWithReference { qualification = "", name = variable }
                         (expression |> ExtraCheck.locatedRegion)
-        
+
         Compiler.Ast.Source.VarQual { varType = Compiler.Ast.Source.LowVar, qualifier = qualification, name } ->
             initialState
                 |> reduceWithReference { qualification = qualification, name = name }
                     (expression |> ExtraCheck.locatedRegion)
-        
+
         _ ->
             expression
                 |> ExtraCheck.expressionImmediateSubsFoldWithIntroducedVariables
@@ -331,6 +336,6 @@ maybeOnNothing onNothing maybe =
     when maybe is
         Nothing ->
             onNothing {}
-        
+
         Just _ as just ->
             just

@@ -40,7 +40,6 @@ Compares two list and returns how they have changed.
 Each function internally uses Wu's [O(NP) algorithm](http://myerslab.mpi-cbg.de/wp-content/uploads/2014/06/np_diff.pdf).
 
 @docs Change, diff
-
 -}
 
 import Array exposing (Array)
@@ -74,7 +73,7 @@ type BugReport
 diff : Array a -> Array a -> Array (Change a)
 diff a b =
     when testDiff a b is
-        Ok changes->
+        Ok changes ->
             changes
 
         Err _ ->
@@ -259,7 +258,7 @@ onpLoopK :
     -> Array Int
     -> Array (Array { a : Int, b : Int })
     -> StepResult
-onpLoopK snake_ offset ks v =   
+onpLoopK snake_ offset ks v =
     -- TODO optimize
     when ks |> Array.popFirst is
         Nothing ->
@@ -327,4 +326,3 @@ step snake_ offset k v =
 
     else
         Continue (Array.set (k + offset) snaked.path v)
-

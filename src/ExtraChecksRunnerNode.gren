@@ -1,54 +1,47 @@
-module ExtraChecksRunnerNode exposing
-    ( program, Program, initWith, update, subscriptions, ProgramEvent(..), ProgramState
-    , main
-    )
-
+module ExtraChecksRunnerNode exposing (Program, ProgramEvent(..), ProgramState, initWith, main, program, subscriptions, update)
 {-| Run checks in the command line.
 
 @docs program, Program, initWith, update, subscriptions, ProgramEvent, ProgramState
-
 ## _only for trying it out_
 
 @docs main
-
 -}
-
-import Dict exposing (Dict)
-import Json.Decode
-import ExtraCheck
-import Node
-import Compiler.SourcePosition
-import Compiler.Outline
-import Compiler.Ast.Source
-import DictLocalExtra
 import Ansi
-import Diff
 import Array.Builder
-import String.Parser.Advanced
-import Compiler.Parse.Module
-import Compiler.Parse.Context
-import FileSystem
-import Init
-import Platform.Sub
-import FileSystem.Path
-import Platform.Cmd
-import Task
+import Bytes
+import Bytes.Encode
+import Compiler.Ast.Source
+import Compiler.License
 import Compiler.ModuleName
+import Compiler.Outline
 import Compiler.Package
+import Compiler.PackageName
+import Compiler.Parse.Context
+import Compiler.Parse.Module
 import Compiler.Paths
-import Stream
 import Compiler.Platform
+import Compiler.SourcePosition
+import DebugIsNotUsed
+import Dict exposing (Dict)
+import DictLocalExtra
+import Diff
+import DocumentationDoesNotContainTodo
+import ExtraCheck
+import FileSystem
+import FileSystem.Path
+import Init
+import IntroducedNameIsUsed
+import Json.Decode
+import Node
+import Platform.Cmd
+import Platform.Sub
 import SemanticVersion
 import SemanticVersionRange
-import Compiler.License
-import Compiler.PackageName
-import Bytes
+import Stream
 import Stream.Log
+import String.Parser.Advanced
+import Task
 import Terminal
-import Bytes.Encode
-import IntroducedNameIsUsed
-import DebugIsNotUsed
-import DocumentationDoesNotContainTodo
 
 
 {-| A node program produced by [`ExtraChecksRunnerNode.program`](#Program)
@@ -76,7 +69,8 @@ type ProgramState
                     , path : String
                     }
                 , otherErrors :
-                    Dict String
+                    Dict
+                        String
                         (Array
                             { region : Compiler.SourcePosition.Region
                             , message : String
@@ -251,15 +245,19 @@ readGrenPackage projectToAnalyzePath fileSystemPermission cacheRoot { name, vers
                 (when error is
                     Compiler.Package.FromPathOutlineInvalidString ->
                         "invalid string"
+
                     Compiler.Package.FromPathOutlineFileSystemError fileSystemError ->
                         "file system error: "
                             ++ (fileSystemError |> FileSystem.errorToString)
                             ++ " (Is the gren version correct? If not, please modify your minimum-supported gren-version in your checked project's gren.json)"
+
                     Compiler.Package.FromPathOutlineInvalidJson jsonError ->
                         "invalid gren.json: "
                             ++ (jsonError |> Json.Decode.errorToString)
+
                     Compiler.Package.FromPathOutlineIsApp ->
                         "invalid gren.json, expected type package"
+
                     Compiler.Package.FromPathFindSourcesError _ ->
                         "failed to find sources"
                 )
@@ -315,7 +313,7 @@ parseCompilerPackage package =
                             -- should largely not happen in practice
                             -- if it does, a compiler error will be printed anyway
                             soFar
-                        
+
                         Ok syntax ->
                             soFar
                                 |> Array.Builder.pushLast
@@ -405,16 +403,16 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                                             Just
                                                 { path =
                                                     modulePosixPath
-                                                        -- hacky solution to get the path
-                                                        -- relative to the projectToAnalyzePath
-                                                        |> String.dropFirst
+                                                        |> -- hacky solution to get the path
+                                                           -- relative to the projectToAnalyzePath
+                                                           String.dropFirst
                                                             ((projectToAnalyzePath |> FileSystem.Path.toPosixString |> String.count) + 1)
                                                 , source = module_.source
                                                 }
-                                        
+
                                         else
                                             Nothing
-                                    ) 
+                                    )
                         , grenJson = grenJson
                         , directDependencies = directDependencies
                         , extraFiles = extraFileSources
@@ -436,7 +434,8 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                                     |> Array.map
                                         (\directDependency ->
                                             readGrenPackage projectToAnalyzePath
-                                                fileSystemPermission cacheRoot
+                                                fileSystemPermission
+                                                cacheRoot
                                                 directDependency
                                                 |> Task.map parseCompilerPackage
                                         )
@@ -458,11 +457,13 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                                                 ++ (fileSystemError |> FileSystem.errorToString)
                                                 ++ ", reading gren source files in "
                                                 ++ (projectToAnalyzePath |> FileSystem.Path.toPosixString)
+
                                         Compiler.Outline.FilePathInvalidModuleName { path, inferredModuleName } ->
                                             "invalid file module name, reading gren source file "
                                                 ++ (path |> FileSystem.Path.toPosixString)
                                                 ++ ". Inferred module name would be "
                                                 ++ inferredModuleName
+
                                         Compiler.Outline.FileContentNotValidString _ ->
                                             "invalid string, reading gren source files in "
                                                 ++ (projectToAnalyzePath |> FileSystem.Path.toPosixString)
@@ -470,7 +471,7 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                         )
                     |> Task.andMap
                         (extraPaths
-                            |> Array.map 
+                            |> Array.map
                                 (\extraPath ->
                                     readFileString fileSystemPermission
                                         (projectToAnalyzePath
@@ -501,10 +502,11 @@ attain new permissions, to for example reach out to the internet.
 -}
 initWith :
     { checks : Array ExtraCheck.Check, extraPaths : Array String }
-    -> { environment : Node.Environment
-       , terminalConfiguration : Maybe Terminal.Configuration
-       , fileSystemPermission : FileSystem.Permission
-       }
+    ->
+        { environment : Node.Environment
+        , terminalConfiguration : Maybe Terminal.Configuration
+        , fileSystemPermission : FileSystem.Permission
+        }
     -> Task.Task Never { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
 initWith config nodeStuff =
     initWithAnalyzingProjectAt projectToAnalyzeParentPath config nodeStuff
@@ -513,10 +515,11 @@ initWith config nodeStuff =
 initWithAnalyzingProjectAt :
     FileSystem.Path.Path
     -> { checks : Array ExtraCheck.Check, extraPaths : Array String }
-    -> { environment : Node.Environment
-       , terminalConfiguration : Maybe Terminal.Configuration
-       , fileSystemPermission : FileSystem.Permission
-       }
+    ->
+        { environment : Node.Environment
+        , terminalConfiguration : Maybe Terminal.Configuration
+        , fileSystemPermission : FileSystem.Permission
+        }
     -> Task.Task Never { model : ProgramState, command : Platform.Cmd.Cmd ProgramEvent }
 initWithAnalyzingProjectAt projectToAnalyzePath config { environment, fileSystemPermission, terminalConfiguration = maybeTerminalConfiguration } =
     Task.succeed
@@ -599,6 +602,7 @@ initWithAnalyzingProjectAt projectToAnalyzePath config { environment, fileSystem
                                                 , Node.setExitCode 1 |> taskExecute
                                                 ]
                                     }
+
                                 Just _ ->
                                     let
                                         maybeNextFixableErrorOrAllUnfixable : Maybe NextFixableOrAllUnfixable
@@ -651,7 +655,9 @@ initWithAnalyzingProjectAt projectToAnalyzePath config { environment, fileSystem
             )
         |> Task.andMap
             (when maybeTerminalConfiguration is
-                Nothing -> Task.succeed {}
+                Nothing ->
+                    Task.succeed {}
+
                 Just terminalConfiguration ->
                     -- it would be nice to also listen for ctrl+c
                     -- on init but I haven't found a way to do this
@@ -689,9 +695,8 @@ subscriptionsAnalyzingProjectAt projectToAnalyzePath config stateOrExited =
                         let
                             relativeSourceDirectoryPath : FileSystem.Path.Path
                             relativeSourceDirectoryPath =
-                                (projectToAnalyzePath
+                                projectToAnalyzePath
                                     |> FileSystem.Path.append sourceDirectory
-                                )
                         in
                         FileSystem.watchRecursive state.fileSystemPermission
                             (\fileWatchEvent ->
@@ -768,6 +773,7 @@ compilerOutlineDirectDependencies outline =
                     (Array.Builder.empty 1)
                 |> Array.Builder.toArray
 
+
 {-| The "react to an incoming event" part of a program definition for assembling yourself
 -}
 update :
@@ -789,25 +795,35 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
     when stateOrExited is
         Exiting ->
             { model = Exiting, command = Platform.Cmd.none }
-        
+
         Running state ->
             when event is
                 Typed stdinBytes ->
                     let
                         acceptedOrExitErr : Result {} Bool
                         acceptedOrExitErr =
-                            when stdinBytes is 
-                                Err _ -> Ok False
+                            when stdinBytes is
+                                Err _ ->
+                                    Ok False
+
                                 Ok responseBytes ->
                                     if responseBytes == ctrlCBytes then
                                         Err {}
+
                                     else
                                         Ok
                                             (when responseBytes |> Bytes.toString is
-                                                Just "y" -> True
-                                                Just "Y" -> True
-                                                Just "\n" -> True
-                                                _ -> False
+                                                Just "y" ->
+                                                    True
+
+                                                Just "Y" ->
+                                                    True
+
+                                                Just "\n" ->
+                                                    True
+
+                                                _ ->
+                                                    False
                                             )
                     in
                     when acceptedOrExitErr is
@@ -816,7 +832,7 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                             , command =
                                 Node.setExitCode 1 |> taskExecute
                             }
-                        
+
                         Ok accepted ->
                             when state.fixableErrorsAwaitingResponse is
                                 Nothing ->
@@ -909,15 +925,15 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                             FileSystem.Moved Nothing ->
                                 Stream.Log.line state.environment.stderr
                                     ("warning: while watching the source directory "
-                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString) 
+                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString)
                                         ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
                                     )
                                     |> taskExecute
-                            
+
                             FileSystem.Changed Nothing ->
                                 Stream.Log.line state.environment.stderr
                                     ("warning: while watching the source directory "
-                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString) 
+                                        ++ (sourceDirectory |> FileSystem.Path.toPosixString)
                                         ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
                                     )
                                     |> taskExecute
@@ -937,11 +953,11 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                                                 -- improvement possibility: distinguish file system error and string conversion error
                                                 Err _ ->
                                                     ModuleRemoved { path = removedOrAddedModulePath }
-                                                
+
                                                 Ok source ->
                                                     ModuleAddedOrChanged { path = removedOrAddedModulePath, source = Ok source }
                                         )
-                            
+
                             FileSystem.Changed (Just subPath) ->
                                 let
                                     changedModulePath =
@@ -1127,11 +1143,11 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                                         ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
                                     )
                                     |> taskExecute
-                            
+
                             FileSystem.Changed Nothing ->
                                 Stream.Log.line state.environment.stderr
                                     ("warning: while watching a the extra path "
-                                        ++ extraPath 
+                                        ++ extraPath
                                         ++ ", I got a change event with a missing path, so it was discarded, possibly leading to de-synched project state."
                                     )
                                     |> taskExecute
@@ -1151,11 +1167,11 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                                                 -- improvement possibility: distinguish file system error and string conversion error
                                                 Err _ ->
                                                     ExtraFileRemoved { path = removedOrAddedExtraPath }
-                                                
+
                                                 Ok source ->
                                                     ExtraFileAddedOrChanged { path = removedOrAddedExtraPath, source = Ok source }
                                         )
-                            
+
                             FileSystem.Changed (Just subPath) ->
                                 let
                                     changedExtraPath =
@@ -1177,7 +1193,7 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                             { model = stateOrExited
                             , command = Stream.Log.line state.environment.stderr error |> taskExecute
                             }
-                        
+
                         Ok extraFileAddedOrChangedSource ->
                             let
                                 fileAddedOrChangedPathPosix : String
@@ -1356,7 +1372,7 @@ checkErrorsToString ansiConfig projectFilesByPath checkErrors =
                                             )
                                 )
                             |> String.join "\n\n"
-                    )
+                       )
                     ++ "\n\n\n"
             )
             ""
@@ -1491,8 +1507,12 @@ reviewRunList checks project =
 sourceRegionCompare : Compiler.SourcePosition.Region -> Compiler.SourcePosition.Region -> Order
 sourceRegionCompare a b =
     when sourcePositionCompare a.start b.start is
-        LT -> LT
-        GT -> GT
+        LT ->
+            LT
+
+        GT ->
+            GT
+
         EQ ->
             sourcePositionCompare a.end b.end
 
@@ -1500,8 +1520,12 @@ sourceRegionCompare a b =
 sourcePositionCompare : Compiler.SourcePosition.Position -> Compiler.SourcePosition.Position -> Order
 sourcePositionCompare a b =
     when Basics.compare a.col b.col is
-        LT -> LT
-        GT -> GT
+        LT ->
+            LT
+
+        GT ->
+            GT
+
         EQ ->
             Basics.compare a.row b.row
 
@@ -1541,7 +1565,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                             Just _ as soFarFix ->
                                 if errors |> Array.isEmpty then
                                     soFar
-                                
+
                                 else
                                     { fixable = soFarFix
                                     , otherErrors = soFar.otherErrors |> Dict.set path errors
@@ -1625,17 +1649,17 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                                                 , otherErrors =
                                                     if errors |> Array.isEmpty then
                                                         soFar.otherErrors
-                                                    
+
                                                     else
                                                         soFar.otherErrors |> Dict.set path errors
                                                 }
-                                            
+
                                             Just fixable ->
                                                 { fixable = Just fixable.info
                                                 , otherErrors =
                                                     if (errors |> Array.length) <= 1 then
                                                         soFar.otherErrors
-                                                    
+
                                                     else
                                                         soFar.otherErrors
                                                             |> Dict.set path (errors |> Array.remove fixable.index)
@@ -1655,7 +1679,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                 Nothing
 
             else
-                AllUnfixable (nextFixableErrorOrAll.otherErrors) |> Just
+                AllUnfixable nextFixableErrorOrAll.otherErrors |> Just
 
 
 allModuleFilesToWithParsedSyntax :
@@ -1712,8 +1736,8 @@ allModuleFilesToWithParsedSyntax moduleFiles =
                                     )
             )
             (Ok (Array.Builder.empty 2))
-            |> Result.mapError Array.Builder.toArray
-            |> Result.map Array.Builder.toArray
+        |> Result.mapError Array.Builder.toArray
+        |> Result.map Array.Builder.toArray
 
 
 moduleAndCommentsParser :
@@ -1725,7 +1749,7 @@ moduleAndCommentsParser :
         }
 moduleAndCommentsParser =
     String.Parser.Advanced.succeed
-        (\syntax context -> 
+        (\syntax context ->
             { syntax = syntax, comments = context.comments |> Array.Builder.toArray }
         )
         |> String.Parser.Advanced.keep Compiler.Parse.Module.parser
@@ -1745,16 +1769,16 @@ errorDisplay :
     -> String
     ->
         { error_
-            | path : String
-            , region : Compiler.SourcePosition.Region
-            , message : String
-            , details : String
-            , fixedSources :
-                Array
-                    { path : String
-                    , fixedSource : String
-                    , originalSource : String
-                    }
+        | path : String
+        , region : Compiler.SourcePosition.Region
+        , message : String
+        , details : String
+        , fixedSources :
+            Array
+                { path : String
+                , fixedSource : String
+                , originalSource : String
+                }
         }
     -> String
 errorDisplay ({ ansi } as ansiConfig) source error =
@@ -1776,7 +1800,7 @@ errorDisplay ({ ansi } as ansiConfig) source error =
         ++ (when error.fixedSources is
                 [] ->
                     ""
-                
+
                 [ fileFixedSource ] ->
                     "\n\nI can fix this for you by changing "
                         ++ fileFixedSource.path
@@ -1798,7 +1822,7 @@ errorDisplay ({ ansi } as ansiConfig) source error =
                                                 fileFixedSource.fixedSource
                                     )
                                 |> String.join "\n\n"
-                            )
+                           )
            )
 
 
@@ -1876,7 +1900,7 @@ continuousNoChangeLinesCollapse noChangeLines =
             when noChangeLine1Up |> Array.last is
                 Nothing ->
                     "\n|   " ++ noChangeLine0
-                
+
                 Just lastLine ->
                     if (noChangeLines |> Array.length) == 2 then
                         "\n|   "
@@ -1927,39 +1951,39 @@ codeExtract ({ ansi } as ansiConfig) source region =
     else
         ([ sourceLineAtRow (region.start.row - 2)
          , let
-                startLineContent : String
-                startLineContent =
-                    sourceLineAtRow (region.start.row - 1)
-            in
-            startLineContent
-                |> withErrorHighlightedRange ansiConfig
-                    { start = region.start.col
-                    , end = (startLineContent |> String.count) + 1
-                    }
+            startLineContent : String
+            startLineContent =
+                sourceLineAtRow (region.start.row - 1)
+           in
+           startLineContent
+            |> withErrorHighlightedRange ansiConfig
+                { start = region.start.col
+                , end = (startLineContent |> String.count) + 1
+                }
          ]
             |> Array.keepIf (\l -> not (l |> String.isEmpty))
             |> String.join "\n"
         )
             ++ "\n"
             ++ (Array.range region.start.row (region.end.row - 2)
-                |> Array.map
-                    (\middleLine ->
-                        sourceLineAtRow middleLine
-                            |> applyIf ansi Ansi.backgroundRed
-                    )
-                |> String.join "\n"
+                    |> Array.map
+                        (\middleLine ->
+                            sourceLineAtRow middleLine
+                                |> applyIf ansi Ansi.backgroundRed
+                        )
+                    |> String.join "\n"
                )
             ++ "\n"
             ++ ([ let
-                        endLineContent : String
-                        endLineContent =
-                            sourceLineAtRow (region.end.row - 1)
+                    endLineContent : String
+                    endLineContent =
+                        sourceLineAtRow (region.end.row - 1)
                   in
                   endLineContent
-                        |> withErrorHighlightedRange ansiConfig
-                            { start = getIndexOfFirstNonSpace endLineContent + 1
-                            , end = region.end.col
-                            }
+                    |> withErrorHighlightedRange ansiConfig
+                        { start = getIndexOfFirstNonSpace endLineContent + 1
+                        , end = region.end.col
+                        }
                 , sourceLineAtRow region.end.row
                 ]
                     |> Array.keepIf (\l -> not (l |> String.isEmpty))
@@ -1972,7 +1996,7 @@ getIndexOfFirstNonSpace string =
     (string |> String.unitLength) - (string |> String.trimLeft |> String.unitLength)
 
 
-withErrorHighlightedRange : { ansi : Bool } -> { start : Int, end : Int } -> (String -> String)
+withErrorHighlightedRange : { ansi : Bool } -> { start : Int, end : Int } -> String -> String
 withErrorHighlightedRange { ansi } lineRange lineContent =
     (lineContent |> String.takeFirst (lineRange.start - 1))
         ++ (lineContent

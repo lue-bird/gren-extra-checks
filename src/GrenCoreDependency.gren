@@ -1,5 +1,6 @@
-module GrenCoreDependency exposing (outline, modules)
-    
+module GrenCoreDependency exposing (modules, outline)
+
+
 {- contains parts of the source code of gren-lang/core
 in the multiline string literals. gren-lang/core is licensed under:
     
@@ -17,24 +18,23 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     
 -}
-    
-    
-import Json.Decode
+
+
 import Compiler.Ast.Source
+import Compiler.License
 import Compiler.Outline
-import Json.Decode
-import Compiler.SourcePosition
-import String.Parser.Advanced
-import Compiler.Parse.Type
+import Compiler.PackageName
 import Compiler.Parse.Context
 import Compiler.Parse.Module
+import Compiler.Parse.Type
 import Compiler.Platform
-import Compiler.License
-import SemanticVersionRange
+import Compiler.SourcePosition
 import Dict
-import Compiler.PackageName
+import Json.Decode
+import SemanticVersionRange
+import String.Parser.Advanced
 
-    
+
 modules : Array { syntax : Compiler.Ast.Source.Module, source : String }
 modules =
     -- should probably also add Debug, Platform, Platform.Cmd, Platform.Sub
@@ -146,7 +146,8 @@ grenJsonSource =
         "dependencies": {}
     }
     """
-    
+
+
 basicsSource =
     """
     module Basics exposing
@@ -870,7 +871,8 @@ basicsSource =
     never (JustOneMore nvr) =
         never nvr
     """
-    
+
+
 arraySource =
     """
     module Array exposing
@@ -1676,7 +1678,8 @@ arraySource =
     sortWith =
         Gren.Kernel.Array.sortWith
     """
-    
+
+
 maybeSource =
     """
     module Maybe exposing
@@ -1994,7 +1997,8 @@ maybeSource =
             Nothing ->
                 default
     """
-    
+
+
 resultSource =
     """
     module Result exposing
@@ -2405,7 +2409,8 @@ resultSource =
             Err _ ->
                 False
     """
-    
+
+
 charSource =
     """
     module Char exposing
@@ -2460,7 +2465,7 @@ charSource =
     
         'Σ'
     
-        '🙈'
+        '\u{01F648}'
     
         '\\t'
     
@@ -2468,7 +2473,7 @@ charSource =
     
         '\\''
     
-        '🙈' -- '🙈'
+        '\u{01F648}' -- '\u{01F648}'
     
     **Note 1:** You _cannot_ use single quotes around multiple characters like in
     JavaScript. This is how we distinguish [`String`](String#String) and `Char`
@@ -2667,9 +2672,9 @@ charSource =
     
         toCode '木' == 0x6728
     
-        toCode '𝌆' == 0x0001D306
+        toCode '\u{01D306}' == 0x0001D306
     
-        toCode '😃' == 0x0001F603
+        toCode '\u{01F603}' == 0x0001F603
     
     -}
     toCode : Char -> Int
@@ -2685,9 +2690,9 @@ charSource =
     
         fromCode 0x6728 == '木'
     
-        fromCode 0x0001D306 == '𝌆'
+        fromCode 0x0001D306 == '\u{01D306}'
     
-        fromCode 0x0001F603 == '😃'
+        fromCode 0x0001F603 == '\u{01F603}'
     
         fromCode -1 == '�'
     
@@ -2702,7 +2707,8 @@ charSource =
     fromCode =
         Gren.Kernel.Char.fromCode
     """
-    
+
+
 stringSource =
     """
     module String exposing
@@ -2809,12 +2815,12 @@ stringSource =
     
         "How are you?"
     
-        "🙈🙉🙊"
+        "\u{01F648}\u{01F649}\u{01F64A}"
     
         -- strings with escape characters
         "this\\n\\t\\"that\\""
     
-        "🙈🙉🙊" -- "🙈🙉🙊"
+        "\u{01F648}\u{01F649}\u{01F64A}" -- "\u{01F648}\u{01F649}\u{01F64A}"
     
         -- multiline strings
         \"\"\"Triple double quotes let you
@@ -3340,7 +3346,7 @@ stringSource =
     
         toArray "abc" == [ 'a', 'b', 'c' ]
     
-        toArray "🙈🙉🙊" == [ '🙈', '🙉', '🙊' ]
+        toArray "\u{01F648}\u{01F649}\u{01F64A}" == [ '\u{01F648}', '\u{01F649}', '\u{01F64A}' ]
     
     -}
     toArray : String -> Array Char
@@ -3352,7 +3358,7 @@ stringSource =
         
         fromArray [ 'a', 'b', 'c' ] == "abc"
     
-        fromArray [ '🙈', '🙉', '🙊' ] == "🙈🙉🙊"
+        fromArray [ '\u{01F648}', '\u{01F649}', '\u{01F64A}' ] == "\u{01F648}\u{01F649}\u{01F64A}"
     
     -}
     fromArray : Array Char -> String
@@ -3573,7 +3579,7 @@ stringSource =
     
         sliceUnits 2 5 "snakes" == "ake"
     
-        sliceUnits 3 5 "hi 😎 there" == "😎"
+        sliceUnits 3 5 "hi \u{01F60E} there" == "\u{01F60E}"
     -}
     sliceUnits : Int -> Int -> String -> String
     sliceUnits =

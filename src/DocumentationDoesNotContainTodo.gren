@@ -1,20 +1,17 @@
 module DocumentationDoesNotContainTodo exposing (check)
-
 {-| Report special marks in comments.
 
 @docs check
-
 -}
-
-import ExtraCheck
-import Dict
-import Compiler.Ast.Source
-import DictLocalExtra
-import Compiler.SourcePosition
 import Array.Builder
+import Compiler.Ast.Source
 import Compiler.Outline
-import String.Regex
 import Compiler.Parse.Context
+import Compiler.SourcePosition
+import Dict
+import DictLocalExtra
+import ExtraCheck
+import String.Regex
 
 
 {-| Report a given set of words and symbols that have special meaning
@@ -56,6 +53,7 @@ check marks =
                                     (\unit soFar ->
                                         if unit |> regexCharNeedsEscaping then
                                             soFar ++ "\\" |> String.pushLast unit
+
                                         else
                                             soFar |> String.pushLast unit
                                     )
@@ -102,20 +100,20 @@ inspectExtraFile marksRegex extraFile =
     when extraFile.source |> sourceOccurrencesOf marksRegex is
         Nothing ->
             knowledgeNone
-    
+
         Just occurrences ->
             Dict.singleton extraFile.path occurrences
 
 
 inspectGrenJson :
-   String.Regex.Regex
+    String.Regex.Regex
     -> { source : String, outline : Compiler.Outline.Outline }
     -> Knowledge
 inspectGrenJson marksRegex grenJson =
     when grenJson.outline is
         Compiler.Outline.App _ ->
             knowledgeNone
-        
+
         Compiler.Outline.Pkg packageOutline ->
             if packageOutline.summary |> String.Regex.contains marksRegex then
                 Dict.singleton ExtraCheck.grenJsonPath
@@ -130,11 +128,12 @@ inspectGrenJson marksRegex grenJson =
 
 inspectModule :
     String.Regex.Regex
-    -> { path : String
-       , source : String
-       , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
-       , syntax : Compiler.Ast.Source.Module
-       }
+    ->
+        { path : String
+        , source : String
+        , comments : Array (Compiler.SourcePosition.Located Compiler.Parse.Context.Comment)
+        , syntax : Compiler.Ast.Source.Module
+        }
     -> Knowledge
 inspectModule marksRegex module_ =
     let
@@ -156,7 +155,9 @@ inspectModule marksRegex module_ =
                                 }
                     )
                     (when module_.syntax.docs is
-                        Nothing -> Array.Builder.empty 0
+                        Nothing ->
+                            Array.Builder.empty 0
+
                         Just moduleDocs ->
                             moduleDocs.value
                                 |> sourceOccurrencesOf marksRegex
@@ -168,8 +169,12 @@ inspectModule marksRegex module_ =
                 |> addMarkOccurrencesFromModuleDeclarations marksRegex module_.syntax.aliases
                 |> (\builder ->
                         when module_.syntax.effects is
-                            Compiler.Ast.Source.NoEffects -> builder
-                            Compiler.Ast.Source.Manager _ -> builder
+                            Compiler.Ast.Source.NoEffects ->
+                                builder
+
+                            Compiler.Ast.Source.Manager _ ->
+                                builder
+
                             Compiler.Ast.Source.Ports ports ->
                                 builder |> addMarkOccurrencesFromModuleDeclarations marksRegex ports
                    )
@@ -177,7 +182,7 @@ inspectModule marksRegex module_ =
     in
     if occurrences |> Array.isEmpty then
         knowledgeNone
-    
+
     else
         Dict.singleton module_.path occurrences
 
@@ -237,7 +242,7 @@ markOccurrencesRelativeToInto builder afterCommentOpen maybeOccurrencesInComment
     when maybeOccurrencesInComment is
         Nothing ->
             builder
-        
+
         Just occurrencesInComment ->
             occurrencesInComment
                 |> Array.foldl
@@ -283,8 +288,11 @@ locationRelativeTo baseStart offsetLocation =
 commentContent : Compiler.Parse.Context.Comment -> String
 commentContent commentValue =
     when commentValue is
-        Compiler.Parse.Context.Line line -> line
-        Compiler.Parse.Context.Block block -> block
+        Compiler.Parse.Context.Line line ->
+            line
+
+        Compiler.Parse.Context.Block block ->
+            block
 
 
 report : Knowledge -> Array ExtraCheck.Error
@@ -324,7 +332,7 @@ sourceOccurrencesOf marksRegex source =
     when matches |> Array.first is
         Nothing ->
             Nothing
-        
+
         Just firstMatch ->
             -- this is fairly un-optimal and just feels wrong
             -- (what do you mean allocate a new object for each unit?).
@@ -364,7 +372,7 @@ sourceOccurrencesOf marksRegex source =
                                     |> Maybe.withDefault soFar.match
                             , nextMatchIndex = soFar.nextMatchIndex + 1
                             }
-                                
+
                         else
                             { unitIndex = soFar.unitIndex + 1
                             , row = soFar.row
@@ -389,18 +397,47 @@ sourceOccurrencesOf marksRegex source =
 regexCharNeedsEscaping : Char -> Bool
 regexCharNeedsEscaping char =
     when char is
-        '.' -> True
-        '^' -> True
-        '$' -> True
-        '*' -> True
-        '+' -> True
-        '?' -> True
-        '(' -> True
-        ')' -> True
-        '[' -> True
-        ']' -> True
-        '{' -> True
-        '}' -> True
-        '\\' -> True
-        '|' -> True
-        _ -> False
+        '.' ->
+            True
+
+        '^' ->
+            True
+
+        '$' ->
+            True
+
+        '*' ->
+            True
+
+        '+' ->
+            True
+
+        '?' ->
+            True
+
+        '(' ->
+            True
+
+        ')' ->
+            True
+
+        '[' ->
+            True
+
+        ']' ->
+            True
+
+        '{' ->
+            True
+
+        '}' ->
+            True
+
+        '\\' ->
+            True
+
+        '|' ->
+            True
+
+        _ ->
+            False

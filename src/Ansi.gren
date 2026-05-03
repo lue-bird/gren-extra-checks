@@ -1,9 +1,10 @@
-module Ansi exposing (clear, backgroundRed, bold, cyan, green, red, yellow)
+module Ansi exposing (backgroundRed, bold, clear, cyan, green, red, yellow)
 
 
 clear : String
 clear =
     "\u{001B}[2J"
+
 
 bold : String -> String
 bold text =
