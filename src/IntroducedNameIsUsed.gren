@@ -149,7 +149,7 @@ knowledgeMerge a b =
             Nothing ->
                 b.grenJsonSource
 
-            Just _ as justGrenJsonSource ->
+            (Just _) as justGrenJsonSource ->
                 justGrenJsonSource
     , directDependencyExposedModules =
         a.directDependencyExposedModules
@@ -1320,7 +1320,7 @@ exposingRemoveVariableEdit variableToRemove exposes =
                     when originModuleExpose is
                         Compiler.Ast.Source.ExposedLower originModuleExposedVariableName ->
                             when foundSoFar is
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
 
                                 Ok { start = Err start, end = _ } ->
@@ -1340,7 +1340,7 @@ exposingRemoveVariableEdit variableToRemove exposes =
 
                         Compiler.Ast.Source.ExposedUpper { name = originModuleExposedTypeName, privacy = _ } ->
                             when foundSoFar is
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
 
                                 Ok { start = Err start, end = _ } ->
@@ -1357,7 +1357,7 @@ exposingRemoveVariableEdit variableToRemove exposes =
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedOperator.start }
 
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
                 )
                 (Err Nothing)
@@ -1385,7 +1385,7 @@ exposingRemoveTypeEdit typeToRemove exposes =
                     when originModuleExpose is
                         Compiler.Ast.Source.ExposedLower originModuleExposedVariableName ->
                             when foundSoFar is
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
 
                                 Ok { start = Err start, end = _ } ->
@@ -1396,7 +1396,7 @@ exposingRemoveTypeEdit typeToRemove exposes =
 
                         Compiler.Ast.Source.ExposedUpper { name = originModuleExposedTypeName, privacy = _ } ->
                             when foundSoFar is
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
 
                                 Ok { start = Err start, end = _ } ->
@@ -1422,7 +1422,7 @@ exposingRemoveTypeEdit typeToRemove exposes =
                                 Ok { start = Err start, end = _ } ->
                                     Ok { start = Ok start, end = originModuleExposedOperator.start }
 
-                                Ok { start = Ok _, end = _ } as alreadyOk ->
+                                (Ok { start = Ok _, end = _ }) as alreadyOk ->
                                     alreadyOk
                 )
                 (Err Nothing)
