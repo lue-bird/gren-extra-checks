@@ -1565,7 +1565,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                 |> Dict.foldl
                     (\path errors soFar ->
                         when soFar.fixable is
-                            Just _ as soFarFix ->
+                            (Just _) as soFarFix ->
                                 if errors |> Array.isEmpty then
                                     soFar
 
@@ -1598,7 +1598,7 @@ errorsByPathToNextFixableErrorOrAll project errorsByPath =
                                                     |> Array.indexedFoldl
                                                         (\errorIndex error fixableSoFar ->
                                                             when fixableSoFar is
-                                                                Just _ as justFixableSoFar ->
+                                                                (Just _) as justFixableSoFar ->
                                                                     justFixableSoFar
 
                                                                 Nothing ->
@@ -1724,7 +1724,7 @@ allModuleFilesToWithParsedSyntax moduleFiles =
 
                     Ok { comments, syntax } ->
                         when soFar is
-                            Err _ as soFarErrorPaths ->
+                            (Err _) as soFarErrorPaths ->
                                 soFarErrorPaths
 
                             Ok soFarWithParsedSyntax ->

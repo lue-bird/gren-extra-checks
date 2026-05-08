@@ -6,9 +6,9 @@ using itself as a dependency
 
 import DebugIsNotUsed
 import DocumentationDoesNotContainTodo
-import IntroducedNameIsUsed
-import ExtraChecksRunnerNode
 import ExtraCheck
+import ExtraChecksRunnerNode
+import IntroducedNameIsUsed
 
 
 main =

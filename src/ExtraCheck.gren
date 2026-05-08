@@ -710,9 +710,9 @@ The modules in this package are so common, that some of them are imported by def
     import Result exposing (Result(..))
     import String exposing (String)
     import Char exposing (Char)
-    
+
     import Debug
-    
+
     import Platform exposing (Program)
     import Platform.Cmd as Cmd exposing (Cmd)
     import Platform.Sub as Sub exposing (Sub)
@@ -1335,7 +1335,7 @@ parseModules moduleFiles =
                                             }
                                     )
 
-                            Err _ as failedToParseSoFar ->
+                            (Err _) as failedToParseSoFar ->
                                 failedToParseSoFar
             )
             (Ok (Array.Builder.empty 2))
@@ -1957,8 +1957,8 @@ emptyDetails errorMessage =
         ("I found an error with the message\n\n  "
             ++ errorMessage
             ++ """
-               
-               
+
+
                but its details were empty. Having details will
                help the user who encounters the problem by for example
                  - explaining what the problem is
@@ -2130,11 +2130,11 @@ unchangedSourceAfterFix error =
         ("After applying the fixes provided by the error with the message\n\n  "
             ++ error.message
             ++ """
-               
-               
+
+
                I expected the fix to make some changes to the source, but it resulted
                in the same source as before the fixes.
-               
+
                This is problematic because I will tell the user that this check provides an
                automatic fix, but I will have to disappoint them when I later find out it
                doesn't do anything.
@@ -2148,16 +2148,16 @@ hasCollisionsInFixRegions error =
         ("When applying the fixes provided by the error with the message\n\n  "
             ++ error.message
             ++ """
-               
-               
+
+
                I found that some fixes were targeting (partially or completely) the same
                section of code. The problem with that is that I can't determine which fix
                to apply first, and the result will be different and potentially invalid
                based on the order in which I apply these fixes.
-               
+
                For this reason, I require that the regions (for replacing and removing) and
                the positions (for inserting) of every fix to be mutually exclusive.
-               
+
                Hint: Maybe you duplicated a fix, or you targeted the wrong node for one
                of your fixes.
                """

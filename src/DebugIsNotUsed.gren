@@ -43,7 +43,7 @@ import Set
 
     a stdout =
         Stream.Log.line stdout "text"
-    
+
     b =
         Node.exit 1
 
@@ -339,5 +339,5 @@ maybeOnNothing onNothing maybe =
         Nothing ->
             onNothing {}
 
-        Just _ as just ->
+        (Just _) as just ->
             just

@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-{- Start from extra-checks/ with: gren run Main
+{-| Start from extra-checks/ with: gren run Main
 Documentation at https://codeberg.org/lue-bird/gren-extra-checks
 -}
 
