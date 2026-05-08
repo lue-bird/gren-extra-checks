@@ -1360,23 +1360,25 @@ checkErrorsToString ansiConfig projectFilesByPath checkErrors =
             (\path pathErrors soFar ->
                 soFar
                     ++ (pathErrors
-                            |> Array.map
-                                (\error ->
-                                    { path = path
-                                    , region = error.region
-                                    , message = error.message
-                                    , details = error.details
-                                    , fixedSources = []
-                                    }
-                                        |> errorDisplay ansiConfig
-                                            (projectFilesByPath
-                                                |> Dict.get path
-                                                |> Maybe.withDefault ""
-                                            )
+                            |> Array.foldl
+                                (\error string ->
+                                    string
+                                        ++ ({ path = path
+                                            , region = error.region
+                                            , message = error.message
+                                            , details = error.details
+                                            , fixedSources = []
+                                            }
+                                                |> errorDisplay ansiConfig
+                                                    (projectFilesByPath
+                                                        |> Dict.get path
+                                                        |> Maybe.withDefault ""
+                                                    )
+                                           )
+                                        ++ "\n\n\n"
                                 )
-                            |> String.join "\n\n"
+                                ""
                        )
-                    ++ "\n\n\n"
             )
             ""
 
