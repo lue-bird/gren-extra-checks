@@ -1,3 +1,11 @@
+## 3.0.0
+Should not actually be breaking for any user :)
+
+- upgrade `gren-lang/compiler-common` to 3.0.0 and as a result `gren-lang/compiler-node` to 5.0.0
+- change `ExtraChecksRunnerNode.ProgramEvent` from type exposing variants to type alias to internal type and also change `ProgramStateInternal` to such a type alias.
+  Having a `type` (and exposing variants) wasn't helpful or usable by users anyway and made internal changes unnecessarily breaking
+- internally react to changes to gren.json when running the node watcher program (this would have been a breaking change anyway. The above change makes it so an internal behavior change will not result in a major version bump anymore)
+
 #### 2.0.2
 - `IntroducedNameIsUsed`:
     - do not consider only-self-referential variables and choice types as used
