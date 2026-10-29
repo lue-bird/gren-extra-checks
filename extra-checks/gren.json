@@ -4,11 +4,11 @@
     "source-directories": [
         "src"
     ],
-    "gren-version": "0.6.5",
+    "gren-version": "0.6.6",
     "dependencies": {
         "direct": {
             "gren-lang/core": "7.4.1",
-            "lue-bird/gren-extra-checks": "3.0.0"
+            "lue-bird/gren-extra-checks": "3.0.1"
         },
         "indirect": {
             "gren-lang/node": "6.1.1",
