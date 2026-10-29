@@ -250,15 +250,44 @@ readGrenPackage :
     -> { name : String, version : Compiler.Outline.VersionConstraint SemanticVersion.SemanticVersion }
     -> Task.Task String Compiler.Package.Package
 readGrenPackage projectToAnalyzePath fileSystemPermission { name, version } =
-    FileSystem.readFileStream fileSystemPermission
-        FileSystem.Beginning
-        (when version is
-            Compiler.Outline.LocalPath localPath ->
-                projectToAnalyzePath
+    when version is
+        Compiler.Outline.LocalPath localPath ->
+            Compiler.Package.loadFromPath fileSystemPermission
+                (projectToAnalyzePath
                     |> FileSystem.Path.append localPath
+                )
+                |> Task.mapError
+                    (\error ->
+                        (when error is
+                            Compiler.Package.FromPathOutlineInvalidString ->
+                                "invalid string"
 
-            Compiler.Outline.Version semanticVersion ->
-                projectToAnalyzePath
+                            Compiler.Package.FromPathOutlineFileSystemError fileSystemError ->
+                                "file system error: "
+                                    ++ (fileSystemError |> FileSystem.errorToString)
+                                    ++ " (Is the gren version correct? If not, please modify your minimum-supported gren-version in your checked project's gren.json)"
+
+                            Compiler.Package.FromPathOutlineInvalidJson jsonError ->
+                                "invalid gren.json: "
+                                    ++ (jsonError |> Json.Decode.errorToString)
+
+                            Compiler.Package.FromPathOutlineIsApp ->
+                                "invalid gren.json, expected type package"
+
+                            Compiler.Package.FromPathFindSourcesError _ ->
+                                "failed to find sources"
+                        )
+                            ++ ", reading package "
+                            ++ name
+                            ++ ", "
+                            ++ "from path "
+                            ++ (localPath |> FileSystem.Path.toPosixString)
+                    )
+
+        Compiler.Outline.Version semanticVersion ->
+            FileSystem.readFileStream fileSystemPermission
+                FileSystem.Beginning
+                (projectToAnalyzePath
                     |> FileSystem.Path.appendPosixString "gren_packages"
                     |> FileSystem.Path.appendPosixString
                         ((name |> String.replace "/" "_" |> String.replace "-" "_")
@@ -266,40 +295,34 @@ readGrenPackage projectToAnalyzePath fileSystemPermission { name, version } =
                             ++ (semanticVersion |> SemanticVersion.toString |> String.replace "." "_")
                             ++ ".pkg.gz"
                         )
-        )
-        |> Task.mapError
-            (\error ->
-                "file system error: "
-                    ++ (error |> FileSystem.errorToString)
-                    ++ " (Have you compiled your project at least once? There needs to be a local gren_packages/ directory with all dependencies archived)"
-            )
-        |> Task.andThen
-            (\bytesStream ->
-                Compiler.Package.loadFromStream bytesStream
-                    |> Task.mapError
-                        (\error ->
-                            (when error is
-                                Compiler.Package.FromStreamStreamError streamError ->
-                                    "stream error: "
-                                        ++ Stream.errorToString streamError
+                )
+                |> Task.mapError
+                    (\error ->
+                        "file system error: "
+                            ++ (error |> FileSystem.errorToString)
+                            ++ " (Have you compiled your project at least once? There needs to be a local gren_packages/ directory with all dependencies archived)"
+                    )
+                |> Task.andThen
+                    (\bytesStream ->
+                        Compiler.Package.loadFromStream bytesStream
+                            |> Task.mapError
+                                (\error ->
+                                    (when error is
+                                        Compiler.Package.FromStreamStreamError streamError ->
+                                            "stream error: "
+                                                ++ Stream.errorToString streamError
 
-                                Compiler.Package.FromStreamInvalidJson jsonError ->
-                                    "invalid gren.json: "
-                                        ++ (jsonError |> Json.Decode.errorToString)
-                            )
-                                ++ ", reading package "
-                                ++ name
-                                ++ ", "
-                                ++ (when version is
-                                        Compiler.Outline.LocalPath localPath ->
-                                            "from path " ++ (localPath |> FileSystem.Path.toPosixString)
-
-                                        Compiler.Outline.Version semanticVersion ->
-                                            "version "
-                                                ++ (semanticVersion |> SemanticVersion.toString)
-                                   )
-                        )
-            )
+                                        Compiler.Package.FromStreamInvalidJson jsonError ->
+                                            "invalid gren.json: "
+                                                ++ (jsonError |> Json.Decode.errorToString)
+                                    )
+                                        ++ ", reading package "
+                                        ++ name
+                                        ++ ", "
+                                        ++ "version "
+                                        ++ (semanticVersion |> SemanticVersion.toString)
+                                )
+                    )
 
 
 readFileString : FileSystem.Permission -> FileSystem.Path.Path -> Task.Task String String

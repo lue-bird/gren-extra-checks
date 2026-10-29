@@ -1,3 +1,6 @@
+#### 3.0.2
+- fix regression introduced in 3.0.1 where local: packages were looked for in gren_packages/ instead of at their paths
+
 #### 3.0.1
 - visit dependency sources from the locally archived `gren_packages` instead of the global cache directory (which might have mismatching gren versions and isn't available by default in CI for example).
   This idea was suggested by [Justin Blake](https://github.com/blaix). Thank you!
