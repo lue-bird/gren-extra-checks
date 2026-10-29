@@ -247,56 +247,58 @@ programAnalyzingProjectAt projectToAnalyzePath config =
 readGrenPackage :
     FileSystem.Path.Path
     -> FileSystem.Permission
-    -> Compiler.Paths.CacheRoot
     -> { name : String, version : Compiler.Outline.VersionConstraint SemanticVersion.SemanticVersion }
     -> Task.Task String Compiler.Package.Package
-readGrenPackage projectToAnalyzePath fileSystemPermission cacheRoot { name, version } =
-    Compiler.Package.loadFromPath fileSystemPermission
+readGrenPackage projectToAnalyzePath fileSystemPermission { name, version } =
+    FileSystem.readFileStream fileSystemPermission
+        FileSystem.Beginning
         (when version is
             Compiler.Outline.LocalPath localPath ->
                 projectToAnalyzePath
                     |> FileSystem.Path.append localPath
 
             Compiler.Outline.Version semanticVersion ->
-                Compiler.Paths.packageSources cacheRoot
+                projectToAnalyzePath
+                    |> FileSystem.Path.appendPosixString "gren_packages"
                     |> FileSystem.Path.appendPosixString
-                        ((name |> String.replace "/" "_")
+                        ((name |> String.replace "/" "_" |> String.replace "-" "_")
                             ++ "__"
                             ++ (semanticVersion |> SemanticVersion.toString |> String.replace "." "_")
+                            ++ ".pkg.gz"
                         )
         )
         |> Task.mapError
             (\error ->
-                (when error is
-                    Compiler.Package.FromPathOutlineInvalidString ->
-                        "invalid string"
+                "file system error: "
+                    ++ (error |> FileSystem.errorToString)
+                    ++ " (Have you compiled your project at least once? There needs to be a local gren_packages/ directory with all dependencies archived)"
+            )
+        |> Task.andThen
+            (\bytesStream ->
+                Compiler.Package.loadFromStream bytesStream
+                    |> Task.mapError
+                        (\error ->
+                            (when error is
+                                Compiler.Package.FromStreamStreamError streamError ->
+                                    "stream error: "
+                                        ++ Stream.errorToString streamError
 
-                    Compiler.Package.FromPathOutlineFileSystemError fileSystemError ->
-                        "file system error: "
-                            ++ (fileSystemError |> FileSystem.errorToString)
-                            ++ " (Is the gren version correct? If not, please modify your minimum-supported gren-version in your checked project's gren.json)"
+                                Compiler.Package.FromStreamInvalidJson jsonError ->
+                                    "invalid gren.json: "
+                                        ++ (jsonError |> Json.Decode.errorToString)
+                            )
+                                ++ ", reading package "
+                                ++ name
+                                ++ ", "
+                                ++ (when version is
+                                        Compiler.Outline.LocalPath localPath ->
+                                            "from path " ++ (localPath |> FileSystem.Path.toPosixString)
 
-                    Compiler.Package.FromPathOutlineInvalidJson jsonError ->
-                        "invalid gren.json: "
-                            ++ (jsonError |> Json.Decode.errorToString)
-
-                    Compiler.Package.FromPathOutlineIsApp ->
-                        "invalid gren.json, expected type package"
-
-                    Compiler.Package.FromPathFindSourcesError _ ->
-                        "failed to find sources"
-                )
-                    ++ ", reading package "
-                    ++ name
-                    ++ ", "
-                    ++ (when version is
-                            Compiler.Outline.LocalPath localPath ->
-                                "from path " ++ (localPath |> FileSystem.Path.toPosixString)
-
-                            Compiler.Outline.Version semanticVersion ->
-                                "version "
-                                    ++ (semanticVersion |> SemanticVersion.toString)
-                       )
+                                        Compiler.Outline.Version semanticVersion ->
+                                            "version "
+                                                ++ (semanticVersion |> SemanticVersion.toString)
+                                   )
+                        )
             )
 
 
@@ -356,7 +358,6 @@ initialInfoTask :
     ->
         { extraPaths : Array String
         , fileSystemPermission : FileSystem.Permission
-        , platform : Node.Platform
         }
     ->
         Task.Task
@@ -373,7 +374,7 @@ initialInfoTask :
                         }
                 }
             )
-initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platform } =
+initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission } =
     let
         grenJsonPath : FileSystem.Path.Path
         grenJsonPath =
@@ -406,7 +407,7 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
                         }
                     )
                     |> Task.andMap
-                        (readDirectDependencies projectToAnalyzePath platform fileSystemPermission grenJson.outline)
+                        (readDirectDependencies projectToAnalyzePath fileSystemPermission grenJson.outline)
                     |> Task.andMap
                         (Compiler.Outline.findSourceFiles fileSystemPermission
                             grenJson.outline
@@ -471,42 +472,17 @@ initialInfoTask projectToAnalyzePath { extraPaths, fileSystemPermission, platfor
         |> taskSucceedToResult
 
 
-readDirectDependencies projectToAnalyzePath platform fileSystemPermission outline =
-    Task.succeed
-        (\homeDirectory environmentVariables ->
-            let
-                cacheRoot =
-                    Compiler.Paths.cacheRoot
-                        platform
-                        environmentVariables
-                        homeDirectory
-                        (outline |> compilerOutlineGrenVersionMinimum)
-            in
-            outline
-                |> compilerOutlineDirectDependencies
-                |> Array.map
-                    (\directDependency ->
-                        readGrenPackage projectToAnalyzePath
-                            fileSystemPermission
-                            cacheRoot
-                            directDependency
-                            |> Task.map parseCompilerPackage
-                    )
-                |> Task.concurrent
-        )
-        |> Task.andMap (FileSystem.homeDirectory fileSystemPermission)
-        |> Task.andMap Node.getEnvironmentVariables
-        |> Task.andThen Basics.identity
-
-
-compilerOutlineGrenVersionMinimum : Compiler.Outline.Outline -> SemanticVersion.SemanticVersion
-compilerOutlineGrenVersionMinimum outline =
-    when outline is
-        Compiler.Outline.App app ->
-            app.grenVersion
-
-        Compiler.Outline.Pkg pkg ->
-            pkg.grenVersion |> SemanticVersionRange.lowerBound
+readDirectDependencies projectToAnalyzePath fileSystemPermission outline =
+    outline
+        |> compilerOutlineDirectDependencies
+        |> Array.map
+            (\directDependency ->
+                readGrenPackage projectToAnalyzePath
+                    fileSystemPermission
+                    directDependency
+                    |> Task.map parseCompilerPackage
+            )
+        |> Task.concurrent
 
 
 {-| The "starting up" part of a program definition for assembling yourself.
@@ -541,7 +517,6 @@ initWithAnalyzingProjectAt projectToAnalyzePath config ({ environment, fileSyste
             initialInfoTask projectToAnalyzePath
                 { extraPaths = config.extraPaths
                 , fileSystemPermission = fileSystemPermission
-                , platform = environment.platform
                 }
                 |> Task.map
                     (\initialInfoOrError ->
@@ -1016,7 +991,6 @@ updateAnalyzingProjectAt projectToAnalyzePath config event stateOrExited =
                             , initialInfoTask projectToAnalyzePath
                                 { extraPaths = config.extraPaths
                                 , fileSystemPermission = state.fileSystemPermission
-                                , platform = state.environment.platform
                                 }
                                 |> Task.perform Initialized
                             ]

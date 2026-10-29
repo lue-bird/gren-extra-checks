@@ -1,3 +1,7 @@
+#### 3.0.1
+- visit dependency sources from the locally archived `gren_packages` instead of the global cache directory (which might have mismatching gren versions and isn't available by default in CI for example).
+  This idea was suggested by [Justin Blake](https://github.com/blaix). Thank you!
+
 ## 3.0.0
 Should not actually be breaking for any user :)
 
